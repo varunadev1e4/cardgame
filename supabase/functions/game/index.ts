@@ -529,8 +529,6 @@ var Room = class {
       this.members.forEach((m) => m.connected = false);
     });
   }
-  ctx;
-  env;
   state = null;
   status = "waiting";
   game = "blackjack";
