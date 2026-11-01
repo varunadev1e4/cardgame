@@ -44,13 +44,33 @@ function useRoom(code: string, nick: string, create: boolean) {
   const act = async (action: any) => { if (busy.current) return; busy.current = true; await call({ t: 'action', seq: ++seq.current, action }); busy.current = false; };
   return { room, view, chat, err, me, online, flash, send, act };
 }
-const Card = ({ c, sel, onClick }: any) => {
-  if (!c) return <div className="card back">?</div>;
-  const sym: any = { S: '♠', H: '♥', D: '♦', C: '♣', '*': '' };
-  return <div className={'card' + (c.s === 'H' || c.s === 'D' ? ' red' : '') + (sel ? ' sel' : '')} onClick={onClick}>{c.r === 'JK' ? '🃏' : <span>{c.r}<br />{sym[c.s]}</span>}</div>;
+const Card = ({ c, sel, onClick, sm, hint }: any) => {
+  if (!c) return <div className={'card back' + (sm ? ' sm' : '')} />;
+  const sym: any = { S: '♠', H: '♥', D: '♦', C: '♣', '*': '★' }, jk = c.r === 'JK';
+  return <div onClick={onClick} className={'card deal' + (c.s === 'H' || c.s === 'D' ? ' red' : '') + (sel ? ' sel' : '') + (sm ? ' sm' : '') + (hint ? ' hint' : '') + (onClick ? ' tap' : '')}>
+    <span className="cn">{jk ? '🃏' : c.r}</span><span className="cs">{jk ? 'JOKER' : sym[c.s]}</span></div>;
 };
 const Cards = ({ cs }: any) => <div className="row">{cs.map((c: any, i: number) => <Card key={i} c={c} />)}</div>;
-const Scores = ({ s, nm }: any) => <div className="row">{Object.entries(s).map(([id, v]: any) => <span className="chip" key={id}>{nm(id)}: {v}</span>)}</div>;
+const hue = (s: string) => [...String(s)].reduce((a, c) => a * 31 + c.charCodeAt(0), 7) % 360;
+const Av = ({ name, size = 32 }: any) => <span className="av" style={{ width: size, height: size, fontSize: size * 0.45, background: `hsl(${hue(name)} 45% 38%)` }}>{String(name || '?')[0]?.toUpperCase()}</span>;
+const Scores = ({ s, nm, turn }: any) => <div className="row">{Object.entries(s).map(([id, v]: any) => <span className={'pill' + (turn === id ? ' on' : '')} key={id}><Av name={nm(id)} size={22} />{nm(id)} <b>{v}</b></span>)}</div>;
+const Bars = ({ s, max, nm, turn }: any) => <div className="bars">{Object.entries(s).map(([id, x]: any) => <div key={id} className={'bar' + (turn === id ? ' on' : '')}><Av name={nm(id)} size={24} /><span className="bn">{nm(id)}</span><div className="track"><div style={{ width: Math.min(100, Math.max(0, (x / max) * 100)) + '%' }} /></div><b>{x}</b></div>)}</div>;
+const META: Record<string, [string, string]> = { blackjack: ['🂡', 'Beat the dealer to 21'], inbetween: ['🎯', 'Bet a card lands between two others'], flip7: ['🎲', 'Push your luck, bank your points'], leastcount: ['🃏', 'Keep the lowest hand'], elimination: ['💣', 'Dodge bombs, outwit opponents'] };
+const ICON: Record<string, string> = { bomb: '💣', defuse: '🧯', skip: '⏭', peek: '👁', shuffle: '🔀', attack: '⚔️' };
+const RULES: Record<string, string> = {
+  blackjack: 'Get closer to 21 than the dealer without going over. Hit draws a card, Stand stops, Double draws exactly one card for double stakes. A two-card 21 pays 1.5.',
+  inbetween: 'On your turn you see two cards. Bet that the next card lands strictly between them, or pass. Between: +1. Outside: -1. Matching a card exactly costs extra. Pairs with no gap are skipped automatically.',
+  flip7: 'On your turn, Draw or Bank. Every number can be held only once, so drawing a number you already hold busts you for 0 this round, unless you have a 🛡 Shield. Hold 7 different numbers for +15 and the round ends. ×2 doubles your number total, +5 adds 5. First to the target score wins.',
+  leastcount: 'Lowest hand wins. Each turn, draw from the stock or take the top discard, then throw away one card, or several cards of the same rank. When your hand total is at or under the limit, press Show. If nobody has an equal or lower total you score 0 and everyone else adds their hand total. If someone does, you take the penalty. Ace = 1, J/Q/K = 10, Joker = 0.',
+  elimination: 'Draw a card to end your turn. A 💣 bomb eliminates you unless you hold a 🧯 defuse. Before drawing, play action cards: ⏭ skip your draw, ⚔️ attack (next player takes 2 turns), 👁 peek at the top 3, 🔀 shuffle the deck. Last one standing wins.' };
+const MEDAL = ['🥇', '🥈', '🥉'];
+function ranking(g: string, v: any): { id: string; label: string }[] {
+  if (g === 'blackjack') return [...v.players].sort((a: any, b: any) => b.score - a.score).map((p: any) => ({ id: p.id, label: `${p.score} pts` }));
+  if (g === 'flip7') return [...v.players].sort((a: any, b: any) => b.total - a.total).map((p: any) => ({ id: p.id, label: `${p.total} pts` }));
+  if (g === 'inbetween' || g === 'leastcount') return Object.entries(v.scores).sort((a: any, b: any) => (g === 'leastcount' ? a[1] - b[1] : b[1] - a[1])).map(([id, s]: any) => ({ id, label: `${s} pts` }));
+  return [...v.alive, ...[...v.eliminated].reverse()].map((id: string, i: number) => ({ id, label: i === 0 ? 'Last one standing' : 'Eliminated' }));
+}
+const Podium = ({ g, v, nm }: any) => <div className="podium"><h2>Final results</h2>{ranking(g, v).map((x, i) => <div key={x.id} className={'prow p' + i}><span className="medal">{MEDAL[i] || i + 1}</span><Av name={nm(x.id)} /><b>{nm(x.id)}</b><span className="grow" /><span>{x.label}</span></div>)}</div>;
 const Btn = ({ onClick, children, ghost }: any) => <button className={ghost ? 'ghost' : ''} onClick={onClick}>{children}</button>;
 
 function BJ({ v, act, nm }: any) {
@@ -67,31 +87,50 @@ function IB({ v, act, nm }: any) {
     <Scores s={v.scores} nm={nm} /></div>;
 }
 function F7({ v, act, nm }: any) {
-  return <div><p>Round {v.round}/{v.rounds} · first to {v.target} · deck {v.deckCount}</p>
-    {v.players.map((p: any) => <div key={p.id} className={'seat' + (v.turn === p.id ? ' turn' : '')}><b>{nm(p.id)}</b> · {p.status} · total {p.total} · this round {p.roundScore}
-      <div className="row">{p.nums.map((n: number, i: number) => <span className="chip" key={i}>{n}</span>)}{p.shield && <span className="chip">🛡 Shield</span>}{p.x2 && <span className="chip">×2</span>}{p.p5 > 0 && <span className="chip">+5 ×{p.p5}</span>}</div></div>)}
-    {v.phase === 'play' && v.turn === v.you && <div className="row"><Btn onClick={() => act({ type: 'draw' })}>Draw</Btn><Btn ghost onClick={() => act({ type: 'stop' })}>Stop & bank</Btn></div>}
-    {v.phase === 'roundOver' && <Btn onClick={() => act({ type: 'next' })}>Next round</Btn>}
-    <div className="chat">{v.log.map((x: string, i: number) => <div key={i}>{x}</div>)}</div></div>;
+  const me = v.players.find((p: any) => p.id === v.you), mine = v.turn === v.you && v.phase === 'play' && me?.status === 'active', last = v.log.slice(-4);
+  return <div className="f7"><p className="info">Round {v.round}/{v.rounds} · first to <b>{v.target}</b> · {v.deckCount} cards left</p>
+    <Bars s={Object.fromEntries(v.players.map((p: any) => [p.id, p.total]))} max={v.target} nm={nm} turn={v.turn} />
+    <div className="grid">{v.players.map((p: any) => <div key={p.id} className={'pcard ' + p.status + (v.turn === p.id ? ' on' : '') + (p.id === v.you ? ' me' : '')}>
+      <div className="ph"><Av name={nm(p.id)} /><b>{nm(p.id)}{p.id === v.you && ' (you)'}</b><span className={'badge ' + p.status}>{p.status === 'active' ? 'Playing' : p.status === 'stopped' ? 'Banked' : '💥 Bust'}</span></div>
+      <div className="tiles">{p.nums.map((n: number) => <span key={n} className={'tile n' + n}>{n}</span>)}{p.shield && <span className="tile sp">🛡</span>}{p.x2 && <span className="tile sp">×2</span>}{p.p5 > 0 && <span className="tile sp">+5{p.p5 > 1 ? '×' + p.p5 : ''}</span>}{!p.nums.length && !p.shield && <span className="muted">no cards yet</span>}</div>
+      <div className="seven">{Array.from({ length: 7 }, (_, i) => <i key={i} className={i < p.nums.length ? 'f' : ''} />)}<small>{p.nums.length}/7 for +15</small></div>
+      <div className="rs">{p.status === 'bust' ? 0 : '+' + p.roundScore}<small> this round</small></div></div>)}</div>
+    <div className="feed">{last.map((x: string, i: number) => <div key={x + i} className={i === last.length - 1 ? 'new' : ''}>{x}</div>)}</div>
+    {mine && <div className="actions"><button className="primary big" onClick={() => act({ type: 'draw' })}>Draw a card</button><button className="gold big" onClick={() => act({ type: 'stop' })}>Bank +{me.roundScore}</button></div>}
+    {mine && me.nums.length > 0 && <p className="muted">Drawing a duplicate of {me.nums.join(', ')} busts you{me.shield ? ' (your 🛡 saves you once)' : ''}.</p>}
+    {v.phase === 'roundOver' && <div className="actions"><button className="primary big" onClick={() => act({ type: 'next' })}>Next round</button></div>}</div>;
 }
+const cval = (c: any) => c.r === 'JK' ? 0 : c.r === 'A' ? 1 : ['J', 'Q', 'K'].includes(c.r) ? 10 : +c.r;
 function LC({ v, act, nm }: any) {
-  const [sel, setSel] = useState<number[]>([]); const mine = v.turn === v.you;
+  const [sel, setSel] = useState<number[]>([]);
+  useEffect(() => setSel([]), [v.turnPhase, v.round, v.hand.length]);
+  const play = v.phase === 'play', mine = v.turn === v.you && play, start = mine && v.turnPhase === 'start', disc = mine && v.turnPhase === 'discard';
+  const lim = +(/≤ (\d+)/.exec(v.rules)?.[1] ?? 10), target = +(/Out at (\d+)/.exec(v.rules)?.[1] ?? 100);
+  const tot = v.hand.reduce((a: number, c: any) => a + cval(c), 0), canShow = start && tot <= lim;
+  const ranks = new Set(sel.map(i => v.hand[i].r)), okSel = sel.length > 0 && ranks.size === 1;
   const tog = (i: number) => setSel(s => s.includes(i) ? s.filter(x => x !== i) : [...s, i]);
-  return <div><p>Round {v.round} · {v.rules}</p>{v.turn && <p>Turn: <b>{nm(v.turn)}</b> ({v.turnPhase === 'start' ? 'draw or show' : 'discard'})</p>}
-    <div className="row"><span>Discard top:</span><Card c={v.discardTop} /><span className="chip">Stock {v.stock}</span>{Object.entries(v.counts).map(([id, n]: any) => <span className="chip" key={id}>{nm(id)}: {n} cards</span>)}</div>
-    <h4>Your hand</h4><div className="row">{v.hand.map((c: any, i: number) => <Card key={i} c={c} sel={sel.includes(i)} onClick={() => mine && v.turnPhase === 'discard' && tog(i)} />)}</div>
-    {v.phase === 'play' && mine && v.turnPhase === 'start' && <div className="row"><Btn onClick={() => act({ type: 'draw', from: 'stock' })}>Draw stock</Btn><Btn onClick={() => act({ type: 'draw', from: 'discard' })}>Take discard</Btn><Btn ghost onClick={() => act({ type: 'show' })}>Show</Btn></div>}
-    {v.phase === 'play' && mine && v.turnPhase === 'discard' && <Btn onClick={() => { act({ type: 'discard', cards: sel }); setSel([]); }}>Discard selected (same rank only)</Btn>}
+  const hint = !play ? '' : !mine ? `Waiting for ${nm(v.turn)}…` : start ? 'Your turn: tap the Stock or the Discard pile to draw' + (canShow ? ', or Show your hand' : '') : 'Tap the card(s) to throw away. Several cards only if they share a rank.';
+  return <div className="lc">
+    <div className="opps">{Object.entries(v.counts).filter(([id]) => id !== v.you).map(([id, n]: any) => <div key={id} className={'opp' + (v.turn === id ? ' on' : '')}><Av name={nm(id)} /><b>{nm(id)}</b><div className="fan">{Array.from({ length: Math.min(n, 9) }, (_, i) => <i key={i} />)}</div><small>{n} cards · {v.scores[id]} pts</small></div>)}</div>
+    <div className="table">
+      <div className={'pile' + (start ? ' tap' : '')} onClick={() => start && act({ type: 'draw', from: 'stock' })}><div className="card back" /><small>Stock · {v.stock}</small></div>
+      <div className={'pile' + (start ? ' tap' : '')} onClick={() => start && act({ type: 'draw', from: 'discard' })}><Card c={v.discardTop} /><small>Discard</small></div></div>
+    {hint && <p className={'hint-line' + (mine ? ' mine' : '')}>{hint}</p>}
+    <div className="hand">{v.hand.map((c: any, i: number) => <div key={i} className="slot"><Card c={c} sel={sel.includes(i)} hint={disc && sel.length > 0 && !sel.includes(i) && ranks.has(c.r)} onClick={disc ? () => tog(i) : undefined} /><small>{cval(c)}</small></div>)}</div>
+    <p className="total">Your hand: <b className={tot <= lim ? 'good' : ''}>{tot}</b> · you may Show at {lim} or less</p>
+    {start && <div className="actions"><button className="primary big" onClick={() => act({ type: 'draw', from: 'stock' })}>Draw from stock</button><button className="big" onClick={() => act({ type: 'draw', from: 'discard' })}>Take discard</button><button className="gold big" disabled={!canShow} onClick={() => act({ type: 'show' })}>Show</button></div>}
+    {disc && <div className="actions"><button className="primary big" disabled={!okSel} onClick={() => { act({ type: 'discard', cards: sel }); setSel([]); }}>{sel.length ? `Discard ${sel.length} card${sel.length > 1 ? 's' : ''}` : 'Pick a card'}</button>{sel.length > 1 && !okSel && <span className="muted">Selected cards must share a rank</span>}</div>}
     {v.summary && <div className="banner">{v.summary}</div>}
-    {v.revealed && Object.entries(v.revealed).map(([id, h]: any) => <div key={id}><b>{nm(id)}</b><Cards cs={h} /></div>)}
-    {v.phase === 'roundOver' && <Btn onClick={() => act({ type: 'next' })}>Next round</Btn>}<Scores s={v.scores} nm={nm} /></div>;
+    {v.revealed && <div className="reveal">{Object.entries(v.revealed).map(([id, h]: any) => <div className="seat" key={id}><Av name={nm(id)} /> <b>{nm(id)}</b> <span className="chip">{h.reduce((a: number, c: any) => a + cval(c), 0)} in hand</span><Cards cs={h} /></div>)}</div>}
+    {v.phase === 'roundOver' && <div className="actions"><button className="primary big" onClick={() => act({ type: 'next' })}>Next round</button></div>}
+    <h4>Scores (out at {target})</h4><Bars s={v.scores} max={target} nm={nm} turn={v.turn} /></div>;
 }
 function EL({ v, act, nm }: any) {
   const mine = v.turn === v.you && v.phase === 'play';
   return <div><p>Alive: {v.alive.map(nm).join(', ')} · Eliminated: {v.eliminated.map(nm).join(', ') || 'none'} · Deck {v.deckCount}</p>
     {v.turn && <p>Turn: <b>{nm(v.turn)}</b> {v.turnsOwed > 1 && `(${v.turnsOwed} turns owed)`}</p>}
     <div className="row">{Object.entries(v.counts).map(([id, n]: any) => <span className="chip" key={id}>{nm(id)}: {n} cards</span>)}</div>
-    <h4>Your hand</h4><div className="row">{v.hand.map((c: string, i: number) => <button key={i} className={['skip', 'peek', 'shuffle', 'attack'].includes(c) && mine ? '' : 'ghost'} onClick={() => mine && act({ type: 'play', card: c })}>{c}</button>)}</div>
+    <h4>Your hand</h4><div className="row">{v.hand.map((c: string, i: number) => <button key={i} className={'tcard ' + (['skip', 'peek', 'shuffle', 'attack'].includes(c) && mine ? 'play' : 'ghost')} onClick={() => mine && act({ type: 'play', card: c })}>{ICON[c]} {c}</button>)}</div>
     {v.peek && <p>Top of deck: {v.peek.join(' → ')}</p>}{mine && <Btn onClick={() => act({ type: 'draw' })}>Draw card (ends turn)</Btn>}
     <div className="chat">{v.log.slice().reverse().map((x: string, i: number) => <div key={i}>{x}</div>)}</div></div>;
 }
@@ -101,36 +140,42 @@ function Lobby({ r, me, send, nm }: any) {
   const host = r.players.find((p: any) => p.id === me)?.isHost, g = GAMES[r.game];
   const set: any = { ...Object.fromEntries(g.set.map(([k, , d]) => [k, d])), ...r.settings };
   const cfg = (game: string, settings: any) => send({ t: 'config', game, settings });
-  return <div className="panel"><h3>Lobby</h3>
-    <ul>{r.players.map((p: any) => <li key={p.id}><span className={'dot' + (p.connected ? ' on' : '')} />{p.nickname} {p.isHost && '👑'} {host && p.id !== me && <button className="ghost" onClick={() => send({ t: 'kick', playerId: p.id })}>Remove</button>}</li>)}</ul>
-    <div className="row"><label>Game <select disabled={!host} value={r.game} onChange={e => cfg(e.target.value, {})}>{Object.entries(GAMES).map(([k, x]) => <option key={k} value={k}>{x.name}</option>)}</select></label></div>
-    {g.set.map(([k, label, d]) => <div className="row" key={k}><label>{label} {typeof d === 'boolean'
-      ? <input type="checkbox" disabled={!host} checked={!!set[k]} onChange={e => cfg(r.game, { ...set, [k]: e.target.checked })} />
-      : <input type="number" style={{ width: 80 }} disabled={!host} value={set[k]} onChange={e => cfg(r.game, { ...set, [k]: +e.target.value })} />}</label></div>)}
-    {host ? <Btn onClick={() => send({ t: 'start' })}>Start game</Btn> : <p>Waiting for the host to start…</p>}</div>;
+  return <div className="lobby"><div className="codebox"><small>Room code</small><div className="code">{r.code}</div><small>Press Invite at the top and send the link to your friends</small></div>
+    <div className="panel"><h4>Players ({r.players.length})</h4><div className="plist">{r.players.map((p: any) => <div className="pl" key={p.id}><Av name={p.nickname} /><b>{p.nickname}</b>{p.isHost && <span className="chip">host</span>}<span className={'dot' + (p.connected ? ' on' : '')} /><span className="grow" />{host && p.id !== me && <button className="ghost sm" onClick={() => send({ t: 'kick', playerId: p.id })}>Remove</button>}</div>)}</div></div>
+    <div className="panel"><h4>Game</h4><div className="gpick">{Object.entries(GAMES).map(([k, x]) => <button key={k} disabled={!host} className={'gcard' + (r.game === k ? ' on' : '')} onClick={() => cfg(k, {})}><span className="gi">{META[k][0]}</span><b>{x.name}</b><small>{META[k][1]}</small></button>)}</div>
+      <p className="muted">{RULES[r.game]}</p>
+      <div className="settings">{g.set.map(([k, label, d]) => <label key={k}>{label}{typeof d === 'boolean'
+        ? <input type="checkbox" disabled={!host} checked={!!set[k]} onChange={e => cfg(r.game, { ...set, [k]: e.target.checked })} />
+        : <input type="number" disabled={!host} value={set[k]} onChange={e => cfg(r.game, { ...set, [k]: +e.target.value })} />}</label>)}</div></div>
+    {host ? <button className="primary big" onClick={() => send({ t: 'start' })}>Start game</button> : <p className="muted center">Waiting for the host to start…</p>}</div>;
 }
 function Room({ code, nick, create, leave }: any) {
   const { room, view, chat, err, me, online, flash, send, act } = useRoom(code, nick, create);
-  const [txt, setTxt] = useState('');
+  const [txt, setTxt] = useState(''), [help, setHelp] = useState(false), [chatOpen, setChatOpen] = useState(false);
   const nm = (id: string) => room?.players.find((p: any) => p.id === id)?.nickname ?? String(id).slice(0, 4);
   const Board = room && BOARDS[room.game], host = room?.players.find((p: any) => p.id === me)?.isHost;
+  const turn = room?.status === 'active' ? view?.turn : null, mineTurn = !!turn && turn === me;
+  useEffect(() => { if (mineTurn) navigator.vibrate?.(120); }, [mineTurn]);
   const link = `${location.origin}/?room=${code}`;
-  return <div className="wrap"><div className="top"><h2>Room {code}</h2><div className="row"><span className="chip">{online ? '🟢 connected' : '🔴 reconnecting…'}</span>
-    <Btn ghost onClick={() => navigator.clipboard?.writeText(link)}>Copy invite link</Btn><Btn ghost onClick={leave}>Leave</Btn></div></div>
+  return <div className="wrap"><div className="top"><h2>Room <span className="code sm">{code}</span></h2><div className="row"><span className={'chip ' + (online ? 'ok' : 'bad')}>{online ? 'Connected' : 'Reconnecting…'}</span>
+    {room && <button className="ghost" onClick={() => setHelp(true)}>How to play</button>}<button className="ghost" onClick={() => navigator.clipboard?.writeText(link)}>Invite</button>
+    <button className="ghost chatbtn" onClick={() => setChatOpen(o => !o)}>Chat {chat.length}</button><button className="ghost" onClick={leave}>Leave</button></div></div>
     {err && <div className="err">{err}</div>}{flash && <div className="flash">{nm(flash.from)} {flash.emoji}</div>}
-    <div className="layout"><div>{!room ? <p>Connecting…</p> : room.status === 'waiting' ? <Lobby r={room} me={me} send={send} nm={nm} /> :
-      <div className="panel">{room.status === 'completed' && <div className="banner">🏁 Game over — final scores below. {host && <Btn onClick={() => send({ t: 'rematch' })}>Rematch</Btn>}</div>}
+    {turn && <div className={'turnbar' + (mineTurn ? ' mine' : '')}>{mineTurn ? 'Your turn' : `${nm(turn)} is playing…`}</div>}
+    {help && room && <div className="modal" onClick={() => setHelp(false)}><div className="mbox"><h3>{GAMES[room.game].name}</h3><p>{RULES[room.game]}</p><button className="primary" onClick={() => setHelp(false)}>Got it</button></div></div>}
+    <div className="layout"><div>{!room ? <p className="muted">Connecting…</p> : room.status === 'waiting' ? <Lobby r={room} me={me} send={send} nm={nm} /> :
+      <div className="panel board">{room.status === 'completed' && view && <><Podium g={room.game} v={view} nm={nm} />{host ? <div className="actions"><button className="primary big" onClick={() => send({ t: 'rematch' })}>Play again</button></div> : <p className="muted center">Waiting for the host to start a rematch.</p>}</>}
         {view ? <Board v={view} act={act} nm={nm} /> : <p>Loading…</p>}</div>}</div>
-      <div className="panel"><h4>Players</h4>{room?.players.map((p: any) => <div key={p.id}><span className={'dot' + (p.connected ? ' on' : '')} />{p.nickname}{p.isHost ? ' 👑' : ''}</div>)}
+      <div className={'panel side' + (chatOpen ? ' open' : '')}><h4>Players</h4>{room?.players.map((p: any) => <div className="pl" key={p.id}><Av name={p.nickname} size={24} />{p.nickname}{p.isHost ? ' (host)' : ''}<span className="grow" /><span className={'dot' + (p.connected ? ' on' : '')} /></div>)}
         <h4>Chat</h4><div className="chat">{chat.map((m, i) => <div key={i} className={m.system ? 'sys' : ''}>{m.system ? '' : <b>{m.from}: </b>}{m.text}</div>)}</div>
-        <div className="row">{EMOJI.map(e => <button key={e} className="ghost" onClick={() => send({ t: 'react', emoji: e })}>{e}</button>)}</div>
+        <div className="row">{EMOJI.map(e => <button key={e} className="ghost sm" onClick={() => send({ t: 'react', emoji: e })}>{e}</button>)}</div>
         <input style={{ width: '100%' }} value={txt} maxLength={300} placeholder="Message…" onChange={e => setTxt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && txt.trim()) { send({ t: 'chat', text: txt }); setTxt(''); } }} /></div></div></div>;
 }
 function Home({ initial, onEnter }: any) {
   const [nick, setNick] = useState(localStorage.getItem('cr_nick') || ''), [code, setCode] = useState(initial), [e, setE] = useState('');
   const go = (c: string, create = false) => { const n = nick.trim(); if (!n) return setE('Enter a nickname first'); localStorage.setItem('cr_nick', n); onEnter(c.toUpperCase(), n, create); };
   const create = () => go(newCode(), true);
-  return <div className="home panel"><h1>🃏 Cardroom</h1><input placeholder="Your nickname" maxLength={16} value={nick} onChange={e => setNick(e.target.value)} />
+  return <div className="home panel"><h1>Cardroom</h1><p className="muted">Private card games with friends. No sign-up.</p><input placeholder="Your nickname" maxLength={16} value={nick} onChange={e => setNick(e.target.value)} />
     <Btn onClick={create}>Create private room</Btn><p>or join with a code</p>
     <input placeholder="ROOM CODE" maxLength={6} value={code} onChange={e => setCode(e.target.value.toUpperCase())} /><Btn ghost onClick={() => /^[A-HJ-NP-Z2-9]{6}$/.test(code) ? go(code) : setE('Invalid room code')}>Join room</Btn>
     {e && <div className="err">{e}</div>}</div>;
