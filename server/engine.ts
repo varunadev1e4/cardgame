@@ -21,3 +21,5 @@ export const RANKS = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'] as c
 export const SUITS = ['S','H','D','C'] as const;
 export type Card = { r: typeof RANKS[number]; s: typeof SUITS[number] };
 export const newDeck = (): Card[] => shuffle(SUITS.flatMap(s => RANKS.map(r => ({ r, s }))));
+export const sortHand = (h: Card[]) => h.sort((a, b) => RANKS.indexOf(a.r) - RANKS.indexOf(b.r) || SUITS.indexOf(a.s) - SUITS.indexOf(b.s));
+export const finalTwo = (ids: string[], w: string | null) => w ? [{ id: w, label: 'Winner' }, ...ids.filter(i => i !== w).map(id => ({ id, label: 'Runner-up' }))] : ids.map(id => ({ id, label: 'Draw' }));

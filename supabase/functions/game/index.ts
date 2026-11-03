@@ -17,6 +17,8 @@ function shuffle(a) {
 var RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
 var SUITS = ["S", "H", "D", "C"];
 var newDeck = () => shuffle(SUITS.flatMap((s) => RANKS.map((r) => ({ r, s }))));
+var sortHand = (h) => h.sort((a, b) => RANKS.indexOf(a.r) - RANKS.indexOf(b.r) || SUITS.indexOf(a.s) - SUITS.indexOf(b.s));
+var finalTwo = (ids, w) => w ? [{ id: w, label: "Winner" }, ...ids.filter((i) => i !== w).map((id) => ({ id, label: "Runner-up" }))] : ids.map((id) => ({ id, label: "Draw" }));
 
 // server/games/blackjack.ts
 var value = (h) => {
@@ -62,14 +64,14 @@ function finish(s) {
   const d = value(s.dealer).total, dBJ = isBJ(s.dealer), out = {};
   for (const p of s.players) {
     const t = value(p.hand).total, m = p.doubled ? 2 : 1;
-    let r, pts;
-    if (p.status === "bust") [r, pts] = ["loss", -m];
-    else if (p.status === "blackjack") [r, pts] = dBJ ? ["push", 0] : ["blackjack", 1.5];
-    else if (dBJ) [r, pts] = ["loss", -m];
-    else if (d > 21 || t > d) [r, pts] = ["win", m];
-    else if (t === d) [r, pts] = ["push", 0];
-    else [r, pts] = ["loss", -m];
-    p.score += pts;
+    let r, pts2;
+    if (p.status === "bust") [r, pts2] = ["loss", -m];
+    else if (p.status === "blackjack") [r, pts2] = dBJ ? ["push", 0] : ["blackjack", 1.5];
+    else if (dBJ) [r, pts2] = ["loss", -m];
+    else if (d > 21 || t > d) [r, pts2] = ["win", m];
+    else if (t === d) [r, pts2] = ["push", 0];
+    else [r, pts2] = ["loss", -m];
+    p.score += pts2;
     p.last = r;
     out[p.id] = r;
   }
@@ -400,9 +402,9 @@ var leastcount = {
         hand.push(s.discard.pop());
       } else {
         if (!s.deck.length) {
-          const top = s.discard.pop();
+          const top2 = s.discard.pop();
           s.deck = shuffle(s.discard);
-          s.discard = [top];
+          s.discard = [top2];
         }
         if (!s.deck.length) throw new Error("No cards");
         hand.push(s.deck.pop());
@@ -516,8 +518,728 @@ var elimination = {
   getResults: (s) => ({ ranking: [...s.alive, ...[...s.out].reverse()].map((id, i) => ({ id, place: i + 1 })) })
 };
 
+// server/games/crazy8.ts
+var SYM = { S: "\u2660", H: "\u2665", D: "\u2666", C: "\u2663" };
+var pts = (c) => c.r === "8" ? 50 : ["J", "Q", "K"].includes(c.r) ? 10 : c.r === "A" ? 1 : +c.r;
+var top = (s) => s.discard[s.discard.length - 1];
+var ok = (s, c) => c.r === "8" || c.s === s.suit || c.r === top(s).r;
+var adv = (s, n = 1) => {
+  s.turn = (s.turn + n) % s.ids.length;
+  s.drew = false;
+};
+function draw(s) {
+  if (!s.deck.length && s.discard.length > 1) {
+    const t = s.discard.pop();
+    s.deck = shuffle(s.discard);
+    s.discard = [t];
+  }
+  return s.deck.pop();
+}
+var crazy8 = {
+  id: "crazy8",
+  minPlayers: 2,
+  maxPlayers: 6,
+  initialize(ids) {
+    let deck = newDeck();
+    while (deck[deck.length - 1].r === "8") deck = shuffle(deck);
+    const n = ids.length > 4 ? 5 : 7, hands = {};
+    for (const i of ids) hands[i] = [];
+    for (let k = 0; k < n; k++) for (const i of ids) hands[i].push(deck.pop());
+    ids.forEach((i) => sortHand(hands[i]));
+    const d = deck.pop();
+    return { deck, discard: [d], hands, ids, turn: 0, suit: d.s, drew: false, log: ["Game started"] };
+  },
+  getPlayerView(s, me) {
+    return {
+      game: "crazy8",
+      you: me,
+      turn: s.winner ? null : s.ids[s.turn],
+      hand: s.hands[me],
+      counts: Object.fromEntries(s.ids.map((i) => [i, s.hands[i].length])),
+      top: top(s),
+      suit: s.suit,
+      deckCount: s.deck.length,
+      drew: s.drew,
+      winner: s.winner ?? null,
+      points: s.winner ? Object.fromEntries(s.ids.map((i) => [i, s.hands[i].reduce((a, c) => a + pts(c), 0)])) : null,
+      log: s.log.slice(-6)
+    };
+  },
+  handleAction(s0, pid, a) {
+    const s = structuredClone(s0);
+    if (s.winner) throw new Error("Game over");
+    if (s.ids[s.turn] !== pid) throw new Error("Not your turn");
+    const h = s.hands[pid];
+    if (a.type === "draw") {
+      if (s.drew) throw new Error("Already drew");
+      const c = draw(s);
+      if (!c) {
+        s.log.push(`${pid} cannot draw`);
+        adv(s);
+        return s;
+      }
+      h.push(c);
+      sortHand(h);
+      s.log.push(`${pid} draws a card`);
+      if (!h.some((x) => ok(s, x))) adv(s);
+      else s.drew = true;
+      return s;
+    }
+    if (a.type === "pass") {
+      if (!s.drew) throw new Error("Draw first");
+      adv(s);
+      return s;
+    }
+    if (a.type === "play") {
+      const c = h[a.i];
+      if (!c || !ok(s, c)) throw new Error("That card can't be played");
+      if (c.r === "8" && !SUITS.includes(a.suit)) throw new Error("Choose a suit");
+      h.splice(a.i, 1);
+      s.discard.push(c);
+      s.suit = c.r === "8" ? a.suit : c.s;
+      s.log.push(`${pid} plays ${c.r}${SYM[c.s]}${c.r === "8" ? ` and picks ${SYM[a.suit]}` : ""}`);
+      if (!h.length) {
+        s.winner = pid;
+        s.log.push(`${pid} is out of cards!`);
+        return s;
+      }
+      const nxt = s.ids[(s.turn + 1) % s.ids.length];
+      if (c.r === "2") {
+        for (let k = 0; k < 2; k++) {
+          const d = draw(s);
+          if (d) s.hands[nxt].push(d);
+        }
+        sortHand(s.hands[nxt]);
+        s.log.push(`${nxt} draws 2 and loses a turn`);
+        adv(s, 2);
+      } else if (c.r === "J") {
+        s.log.push(`${nxt} is skipped`);
+        adv(s, 2);
+      } else adv(s);
+      return s;
+    }
+    throw new Error("Unknown action");
+  },
+  isGameOver: (s) => !!s.winner,
+  getResults: (s) => ({ winner: s.winner })
+};
+
+// server/games/bluff.ts
+var bluff = {
+  id: "bluff",
+  minPlayers: 2,
+  maxPlayers: 6,
+  initialize(ids) {
+    const deck = newDeck(), hands = Object.fromEntries(ids.map((i) => [i, []]));
+    deck.forEach((c, k) => hands[ids[k % ids.length]].push(c));
+    ids.forEach((i) => sortHand(hands[i]));
+    return { ids, hands, pile: [], rankIdx: 0, turn: 0, log: ["Game started"] };
+  },
+  getPlayerView(s, me) {
+    return {
+      game: "bluff",
+      you: me,
+      turn: s.winner ? null : s.ids[s.turn],
+      hand: s.hands[me],
+      counts: Object.fromEntries(s.ids.map((i) => [i, s.hands[i].length])),
+      pile: s.pile.length,
+      claim: s.last ? { by: s.last.by, n: s.last.n, rank: s.last.rank } : null,
+      nextRank: RANKS[s.rankIdx],
+      canCall: !!s.last && !s.winner && s.ids[s.turn] === me,
+      pendingWin: s.pendingWin ?? null,
+      reveal: s.reveal ?? null,
+      winner: s.winner ?? null,
+      log: s.log.slice(-6)
+    };
+  },
+  handleAction(s0, pid, a) {
+    const s = structuredClone(s0);
+    if (s.winner) throw new Error("Game over");
+    if (s.ids[s.turn] !== pid) throw new Error("Not your turn");
+    const h = s.hands[pid];
+    if (a.type === "play") {
+      if (s.pendingWin) throw new Error("Call bluff or accept first");
+      const idx = [...new Set(a.cards)];
+      if (idx.length < 1 || idx.length > 4 || idx.some((i) => !Number.isInteger(i) || i < 0 || i >= h.length)) throw new Error("Play 1 to 4 cards");
+      const cards = idx.map((i) => h[i]);
+      s.hands[pid] = h.filter((_, i) => !idx.includes(i));
+      s.pile.push(...cards);
+      const rank = RANKS[s.rankIdx];
+      s.last = { by: pid, n: cards.length, rank, cards };
+      s.rankIdx = (s.rankIdx + 1) % 13;
+      s.reveal = void 0;
+      s.log.push(`${pid} plays ${cards.length} card${cards.length > 1 ? "s" : ""} as ${rank}`);
+      if (!s.hands[pid].length) s.pendingWin = pid;
+      s.turn = (s.turn + 1) % s.ids.length;
+    } else if (a.type === "call") {
+      if (!s.last) throw new Error("Nothing to call");
+      const L = s.last, honest = L.cards.every((c) => c.r === L.rank), loser = honest ? pid : L.by;
+      s.hands[loser].push(...s.pile);
+      sortHand(s.hands[loser]);
+      s.reveal = { by: L.by, n: L.n, rank: L.rank, cards: L.cards, honest, loser };
+      s.log.push(`${pid} calls bluff: ${honest ? "it was honest" : "caught bluffing"}, ${loser} takes the pile`);
+      s.pile = [];
+      s.last = void 0;
+      if (s.pendingWin) {
+        if (honest) s.winner = s.pendingWin;
+        else s.pendingWin = void 0;
+      }
+    } else if (a.type === "accept") {
+      if (!s.pendingWin) throw new Error("Nothing to accept");
+      s.winner = s.pendingWin;
+    } else throw new Error("Unknown action");
+    return s;
+  },
+  isGameOver: (s) => !!s.winner,
+  getResults: (s) => ({ winner: s.winner })
+};
+
+// server/games/gofish.ts
+function bookUp(s, id) {
+  for (const r of RANKS) if (s.hands[id].filter((c) => c.r === r).length === 4) {
+    s.hands[id] = s.hands[id].filter((c) => c.r !== r);
+    s.books[id].push(r);
+    s.log.push(`${id} completes a book of ${r}s`);
+  }
+}
+function settle(s) {
+  for (let k = 0; k <= s.ids.length; k++) {
+    if (s.ids.reduce((a, i) => a + s.books[i].length, 0) >= 13) {
+      s.phase = "over";
+      return;
+    }
+    const id = s.ids[s.turn];
+    if (!s.hands[id].length) for (let n = 0; n < 5 && s.deck.length; n++) s.hands[id].push(s.deck.pop());
+    sortHand(s.hands[id]);
+    bookUp(s, id);
+    if (s.hands[id].length) return;
+    s.turn = (s.turn + 1) % s.ids.length;
+  }
+  s.phase = "over";
+}
+var gofish = {
+  id: "gofish",
+  minPlayers: 2,
+  maxPlayers: 6,
+  initialize(ids) {
+    const deck = newDeck(), n = ids.length > 3 ? 5 : 7, hands = Object.fromEntries(ids.map((i) => [i, []]));
+    for (let k = 0; k < n; k++) for (const i of ids) hands[i].push(deck.pop());
+    const s = { deck, hands, books: Object.fromEntries(ids.map((i) => [i, []])), ids, turn: 0, log: ["Game started"], phase: "play" };
+    ids.forEach((i) => {
+      sortHand(s.hands[i]);
+      bookUp(s, i);
+    });
+    settle(s);
+    return s;
+  },
+  getPlayerView(s, me) {
+    return { game: "gofish", you: me, phase: s.phase, turn: s.phase === "play" ? s.ids[s.turn] : null, hand: s.hands[me], counts: Object.fromEntries(s.ids.map((i) => [i, s.hands[i].length])), books: s.books, deckCount: s.deck.length, log: s.log.slice(-6) };
+  },
+  handleAction(s0, pid, a) {
+    const s = structuredClone(s0);
+    if (s.phase !== "play") throw new Error("Game over");
+    if (s.ids[s.turn] !== pid) throw new Error("Not your turn");
+    if (a.type !== "ask") throw new Error("Unknown action");
+    const h = s.hands[pid], t = s.hands[a.target];
+    if (!s.ids.includes(a.target) || a.target === pid || !t?.length) throw new Error("Pick another player who has cards");
+    if (!h.some((c) => c.r === a.rank)) throw new Error("You must hold a card of that rank");
+    const got = t.filter((c) => c.r === a.rank);
+    if (got.length) {
+      s.hands[a.target] = t.filter((c) => c.r !== a.rank);
+      h.push(...got);
+      s.log.push(`${pid} takes ${got.length} ${a.rank}${got.length > 1 ? "s" : ""} from ${a.target}`);
+    } else {
+      s.log.push(`${a.target} says Go Fish to ${pid}`);
+      const c = s.deck.pop();
+      if (c) {
+        h.push(c);
+        if (c.r === a.rank) s.log.push(`${pid} fishes the ${a.rank} they wanted and goes again`);
+        else s.turn = (s.turn + 1) % s.ids.length;
+      } else s.turn = (s.turn + 1) % s.ids.length;
+    }
+    sortHand(h);
+    bookUp(s, pid);
+    settle(s);
+    return s;
+  },
+  isGameOver: (s) => s.phase === "over",
+  getResults: (s) => ({ books: s.books })
+};
+
+// server/games/abstract.ts
+var over2 = (s) => !!s.winner || !!s.draw;
+var L3 = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+var ttt = {
+  id: "ttt",
+  minPlayers: 2,
+  maxPlayers: 2,
+  initialize: (ids) => ({ ids, b: Array(9).fill(null), turn: 0, winner: null, draw: false, line: null }),
+  getPlayerView: (s, me) => ({ game: "ttt", you: me, ids: s.ids, b: s.b, turn: over2(s) ? null : s.ids[s.turn], line: s.line, draw: s.draw, final: over2(s) ? finalTwo(s.ids, s.winner) : null }),
+  handleAction(s0, pid, a) {
+    const s = structuredClone(s0);
+    if (over2(s)) throw new Error("Game over");
+    if (s.ids[s.turn] !== pid) throw new Error("Not your turn");
+    const i = a.i;
+    if (!Number.isInteger(i) || i < 0 || i > 8 || s.b[i] !== null) throw new Error("Invalid square");
+    s.b[i] = s.turn;
+    const w = L3.find((l) => l.every((k) => s.b[k] === s.turn));
+    if (w) {
+      s.winner = pid;
+      s.line = w;
+    } else if (s.b.every((x) => x !== null)) s.draw = true;
+    else s.turn = 1 - s.turn;
+    return s;
+  },
+  isGameOver: over2,
+  getResults: (s) => ({ winner: s.winner })
+};
+var R = 6;
+var C = 7;
+function c4line(b, r, c, p) {
+  for (const [dr, dc] of [[0, 1], [1, 0], [1, 1], [1, -1]]) {
+    const cells2 = [r * C + c];
+    for (const g of [1, -1]) {
+      let rr = r + dr * g, cc = c + dc * g;
+      while (rr >= 0 && rr < R && cc >= 0 && cc < C && b[rr * C + cc] === p) {
+        cells2.push(rr * C + cc);
+        rr += dr * g;
+        cc += dc * g;
+      }
+    }
+    if (cells2.length >= 4) return cells2;
+  }
+  return null;
+}
+var c4 = {
+  id: "c4",
+  minPlayers: 2,
+  maxPlayers: 2,
+  initialize: (ids) => ({ ids, b: Array(R * C).fill(null), turn: 0, winner: null, draw: false, line: null }),
+  getPlayerView: (s, me) => ({ game: "c4", you: me, ids: s.ids, b: s.b, turn: over2(s) ? null : s.ids[s.turn], line: s.line, draw: s.draw, final: over2(s) ? finalTwo(s.ids, s.winner) : null }),
+  handleAction(s0, pid, a) {
+    const s = structuredClone(s0);
+    if (over2(s)) throw new Error("Game over");
+    if (s.ids[s.turn] !== pid) throw new Error("Not your turn");
+    const col = a.col;
+    if (!Number.isInteger(col) || col < 0 || col >= C) throw new Error("Invalid column");
+    let r = R - 1;
+    while (r >= 0 && s.b[r * C + col] !== null) r--;
+    if (r < 0) throw new Error("Column is full");
+    s.b[r * C + col] = s.turn;
+    const w = c4line(s.b, r, col, s.turn);
+    if (w) {
+      s.winner = pid;
+      s.line = w;
+    } else if (s.b.every((x) => x !== null)) s.draw = true;
+    else s.turn = 1 - s.turn;
+    return s;
+  },
+  isGameOver: over2,
+  getResults: (s) => ({ winner: s.winner })
+};
+var dab = {
+  id: "dab",
+  minPlayers: 2,
+  maxPlayers: 2,
+  initialize(ids, st) {
+    const n = Math.min(6, Math.max(2, Number(st.size) || 3));
+    return { ids, n, h: Array.from({ length: n + 1 }, () => Array(n).fill(null)), v: Array.from({ length: n }, () => Array(n + 1).fill(null)), box: Array.from({ length: n }, () => Array(n).fill(null)), score: [0, 0], turn: 0 };
+  },
+  getPlayerView(s, me) {
+    const done = s.score[0] + s.score[1] === s.n * s.n;
+    return {
+      game: "dab",
+      you: me,
+      ids: s.ids,
+      n: s.n,
+      h: s.h,
+      v: s.v,
+      box: s.box,
+      score: s.score,
+      turn: done ? null : s.ids[s.turn],
+      final: done ? s.ids.map((id, i) => ({ id, label: `${s.score[i]} boxes` })).sort((a, b) => parseInt(b.label) - parseInt(a.label)) : null
+    };
+  },
+  handleAction(s0, pid, a) {
+    const s = structuredClone(s0);
+    if (s.score[0] + s.score[1] === s.n * s.n) throw new Error("Game over");
+    if (s.ids[s.turn] !== pid) throw new Error("Not your turn");
+    const arr = a.k === "h" ? s.h : a.k === "v" ? s.v : null;
+    if (!arr || !Number.isInteger(a.r) || !Number.isInteger(a.c) || arr[a.r]?.[a.c] !== null) throw new Error("Invalid line");
+    arr[a.r][a.c] = s.turn;
+    let got = 0;
+    const full = (r, c) => r >= 0 && c >= 0 && r < s.n && c < s.n && s.box[r][c] === null && s.h[r][c] !== null && s.h[r + 1][c] !== null && s.v[r][c] !== null && s.v[r][c + 1] !== null;
+    for (const [r, c] of a.k === "h" ? [[a.r - 1, a.c], [a.r, a.c]] : [[a.r, a.c - 1], [a.r, a.c]]) if (full(r, c)) {
+      s.box[r][c] = s.turn;
+      s.score[s.turn]++;
+      got++;
+    }
+    if (!got) s.turn = 1 - s.turn;
+    return s;
+  },
+  isGameOver: (s) => s.score[0] + s.score[1] === s.n * s.n,
+  getResults: (s) => ({ score: s.score })
+};
+var nim = {
+  id: "nim",
+  minPlayers: 2,
+  maxPlayers: 2,
+  initialize: (ids, st) => ({ ids, piles: Array.from({ length: Math.min(8, Math.max(2, Number(st.piles) || 4)) }, (_, i) => 2 * i + 1), maxTake: Math.max(0, Number(st.maxTake) || 0), misere: !!st.misere, turn: 0, winner: null }),
+  getPlayerView: (s, me) => ({ game: "nim", you: me, ids: s.ids, piles: s.piles, maxTake: s.maxTake, misere: s.misere, turn: s.winner ? null : s.ids[s.turn], final: s.winner ? finalTwo(s.ids, s.winner) : null }),
+  handleAction(s0, pid, a) {
+    const s = structuredClone(s0);
+    if (s.winner) throw new Error("Game over");
+    if (s.ids[s.turn] !== pid) throw new Error("Not your turn");
+    const p = s.piles[a.pile];
+    if (!Number.isInteger(a.pile) || !Number.isInteger(a.n) || p === void 0 || a.n < 1 || a.n > p || s.maxTake > 0 && a.n > s.maxTake) throw new Error("Invalid move");
+    s.piles[a.pile] -= a.n;
+    if (s.piles.every((x) => x === 0)) s.winner = s.misere ? s.ids[1 - s.turn] : pid;
+    else s.turn = 1 - s.turn;
+    return s;
+  },
+  isGameOver: (s) => !!s.winner,
+  getResults: (s) => ({ winner: s.winner })
+};
+var BEATS = { rock: "scissors", paper: "rock", scissors: "paper" };
+var rps = {
+  id: "rps",
+  minPlayers: 2,
+  maxPlayers: 2,
+  initialize(ids, st) {
+    const bestOf = Number(st.bestOf) === 5 ? 5 : 3;
+    return { ids, bestOf, need: Math.ceil(bestOf / 2), picks: { [ids[0]]: null, [ids[1]]: null }, wins: { [ids[0]]: 0, [ids[1]]: 0 }, round: 1, history: [], winner: null };
+  },
+  getPlayerView: (s, me) => ({ game: "rps", you: me, ids: s.ids, bestOf: s.bestOf, need: s.need, round: s.round, wins: s.wins, myPick: s.picks[me], picked: Object.fromEntries(s.ids.map((i) => [i, !!s.picks[i]])), history: s.history, winner: s.winner, turn: null, final: s.winner ? finalTwo(s.ids, s.winner) : null }),
+  handleAction(s0, pid, a) {
+    const s = structuredClone(s0);
+    if (s.winner) throw new Error("Match over");
+    if (!BEATS[a.pick]) throw new Error("Invalid choice");
+    if (s.picks[pid]) throw new Error("Already chosen");
+    s.picks[pid] = a.pick;
+    const [x, y] = s.ids;
+    if (s.picks[x] && s.picks[y]) {
+      const w = s.picks[x] === s.picks[y] ? null : BEATS[s.picks[x]] === s.picks[y] ? x : y;
+      s.history.push({ round: s.round, picks: { ...s.picks }, winner: w });
+      if (w) {
+        s.wins[w]++;
+        if (s.wins[w] >= s.need) s.winner = w;
+      }
+      s.picks = { [x]: null, [y]: null };
+      s.round++;
+    }
+    return s;
+  },
+  isGameOver: (s) => !!s.winner,
+  getResults: (s) => ({ winner: s.winner })
+};
+
+// server/games/party.ts
+var SN = { 16: 6, 47: 26, 49: 11, 56: 53, 62: 19, 64: 60, 87: 24, 93: 73, 95: 75, 98: 78 };
+var LD = { 1: 38, 4: 14, 9: 31, 21: 42, 28: 84, 36: 44, 51: 67, 71: 91, 80: 100 };
+var sl = {
+  id: "sl",
+  minPlayers: 2,
+  maxPlayers: 4,
+  initialize: (ids, st) => ({ ids, pos: Object.fromEntries(ids.map((i) => [i, 0])), turn: 0, last: null, winner: null, exact: st.exact !== false, sixExtra: !!st.sixExtra }),
+  getPlayerView: (s, me) => ({
+    game: "sl",
+    you: me,
+    ids: s.ids,
+    pos: s.pos,
+    last: s.last,
+    jumps: { ...SN, ...LD },
+    turn: s.winner ? null : s.ids[s.turn],
+    final: s.winner ? s.ids.map((id) => ({ id, label: id === s.winner ? "Reached 100" : `Square ${s.pos[id]}` })).sort((a, b) => (b.id === s.winner ? 1 : 0) - (a.id === s.winner ? 1 : 0) || parseInt(b.label.replace(/\D/g, "")) - parseInt(a.label.replace(/\D/g, ""))) : null
+  }),
+  handleAction(s0, pid, a) {
+    const s = structuredClone(s0);
+    if (s.winner) throw new Error("Game over");
+    if (s.ids[s.turn] !== pid) throw new Error("Not your turn");
+    if (a.type !== "roll") throw new Error("Unknown action");
+    const roll = randInt(6) + 1, from = s.pos[pid];
+    let to = from + roll, event = "";
+    if (to > 100) {
+      if (s.exact) {
+        to = from;
+        event = "Needs an exact roll";
+      } else to = 100;
+    }
+    if (to < 100 && SN[to]) {
+      event = `Snake! ${to} \u2192 ${SN[to]}`;
+      to = SN[to];
+    } else if (to < 100 && LD[to]) {
+      event = `Ladder! ${to} \u2192 ${LD[to]}`;
+      to = LD[to];
+    }
+    s.pos[pid] = to;
+    s.last = { pid, roll, from, to, event };
+    if (to === 100) s.winner = pid;
+    else if (!(roll === 6 && s.sixExtra)) s.turn = (s.turn + 1) % s.ids.length;
+    return s;
+  },
+  isGameOver: (s) => !!s.winner,
+  getResults: (s) => ({ winner: s.winner })
+};
+var SAFE = /* @__PURE__ */ new Set([0, 8, 13, 21, 26, 34, 39, 47]);
+var absOf = (s, id, p) => (13 * s.seats[id] + p) % 52;
+var lud = (s, id, roll) => s.tok[id].map((p, t) => (p === -1 ? roll === 6 || !s.enterOnSix : p + roll <= 56) ? t : -1).filter((t) => t >= 0);
+var endTurn2 = (s, extra) => {
+  s.phase = "roll";
+  s.legal = [];
+  if (!extra) s.turn = (s.turn + 1) % s.ids.length;
+};
+var ludo = {
+  id: "ludo",
+  minPlayers: 2,
+  maxPlayers: 4,
+  initialize(ids, st) {
+    const seats = ids.length === 2 ? [0, 2] : ids.map((_, i) => i);
+    return {
+      ids,
+      seats: Object.fromEntries(ids.map((id, i) => [id, seats[i]])),
+      tok: Object.fromEntries(ids.map((id) => [id, [-1, -1, -1, -1]])),
+      turn: 0,
+      phase: "roll",
+      dice: null,
+      legal: [],
+      winner: null,
+      log: ["Game started"],
+      enterOnSix: st.enterOnSix !== false,
+      sixExtra: st.sixExtra !== false,
+      captureExtra: st.captureExtra !== false
+    };
+  },
+  getPlayerView: (s, me) => ({
+    game: "ludo",
+    you: me,
+    ids: s.ids,
+    seats: s.seats,
+    tok: s.tok,
+    turn: s.winner ? null : s.ids[s.turn],
+    phase: s.phase,
+    dice: s.dice,
+    legal: s.ids[s.turn] === me ? s.legal : [],
+    log: s.log.slice(-5),
+    final: s.winner ? s.ids.map((id) => ({ id, label: id === s.winner ? "All tokens home" : `${s.tok[id].filter((p) => p === 56).length} home` })).sort((a, b) => (b.id === s.winner ? 1 : 0) - (a.id === s.winner ? 1 : 0)) : null
+  }),
+  handleAction(s0, pid, a) {
+    const s = structuredClone(s0);
+    if (s.winner) throw new Error("Game over");
+    if (s.ids[s.turn] !== pid) throw new Error("Not your turn");
+    if (a.type === "roll") {
+      if (s.phase !== "roll") throw new Error("Move a token first");
+      s.dice = randInt(6) + 1;
+      s.legal = lud(s, pid, s.dice);
+      s.log.push(`${pid} rolls ${s.dice}`);
+      if (!s.legal.length) {
+        s.log.push(`${pid} has no move`);
+        endTurn2(s, s.dice === 6 && s.sixExtra);
+      } else s.phase = "move";
+      return s;
+    }
+    if (a.type !== "move" || s.phase !== "move" || !s.legal.includes(a.t)) throw new Error("Illegal move");
+    const old = s.tok[pid][a.t], np = old === -1 ? 0 : old + s.dice;
+    s.tok[pid][a.t] = np;
+    let cap = false;
+    if (np <= 50 && !SAFE.has(absOf(s, pid, np))) {
+      for (const o of s.ids) if (o !== pid) s.tok[o].forEach((q, i) => {
+        if (q >= 0 && q <= 50 && absOf(s, o, q) === absOf(s, pid, np)) {
+          s.tok[o][i] = -1;
+          cap = true;
+          s.log.push(`${pid} captures a token of ${o}`);
+        }
+      });
+    }
+    if (np === 56) s.log.push(`${pid} brings a token home`);
+    if (s.tok[pid].every((p) => p === 56)) {
+      s.winner = pid;
+      return s;
+    }
+    endTurn2(s, s.dice === 6 && s.sixExtra || cap && s.captureExtra);
+    return s;
+  },
+  isGameOver: (s) => !!s.winner,
+  getResults: (s) => ({ winner: s.winner })
+};
+var FLEET = [5, 4, 3, 3, 2];
+var cells = (h) => Array.from({ length: h.len }, (_, k) => h.dir === "h" ? h.r * 10 + h.c + k : (h.r + k) * 10 + h.c);
+function clean(ships) {
+  if (!Array.isArray(ships) || ships.length !== 5) return null;
+  const out = ships.map((x) => ({ r: x?.r, c: x?.c, len: x?.len, dir: x?.dir })), used = /* @__PURE__ */ new Set();
+  if (out.map((x) => x.len).sort().join() !== [...FLEET].sort().join()) return null;
+  for (const x of out) {
+    if (!["h", "v"].includes(x.dir) || !Number.isInteger(x.r) || !Number.isInteger(x.c) || x.r < 0 || x.c < 0 || (x.dir === "h" ? x.c + x.len > 10 || x.r > 9 : x.r + x.len > 10 || x.c > 9)) return null;
+    for (const c of cells(x)) {
+      if (used.has(c)) return null;
+      used.add(c);
+    }
+  }
+  return out;
+}
+function randomFleet() {
+  for (; ; ) {
+    const used = /* @__PURE__ */ new Set(), out = [];
+    let ok2 = true;
+    for (const len of FLEET) {
+      let placed = false;
+      for (let k = 0; k < 100 && !placed; k++) {
+        const dir = randInt(2) ? "h" : "v", sh = { r: randInt(dir === "v" ? 11 - len : 10), c: randInt(dir === "h" ? 11 - len : 10), len, dir };
+        if (cells(sh).every((x) => !used.has(x))) {
+          cells(sh).forEach((x) => used.add(x));
+          out.push(sh);
+          placed = true;
+        }
+      }
+      if (!placed) {
+        ok2 = false;
+        break;
+      }
+    }
+    if (ok2) return out;
+  }
+}
+var bs = {
+  id: "bs",
+  minPlayers: 2,
+  maxPlayers: 2,
+  initialize: (ids, st) => ({ ids, ships: {}, ready: { [ids[0]]: false, [ids[1]]: false }, shots: { [ids[0]]: Array(100).fill(0), [ids[1]]: Array(100).fill(0) }, turn: 0, phase: "place", winner: null, hitAgain: !!st.hitAgain, log: ["Place your fleet"] }),
+  getPlayerView(s, me) {
+    const opp = s.ids.find((i) => i !== me), mine = s.ships[me] || [];
+    return {
+      game: "bs",
+      you: me,
+      ids: s.ids,
+      phase: s.phase,
+      turn: s.phase === "battle" ? s.ids[s.turn] : null,
+      ready: s.ready,
+      myShips: mine.map((h) => ({ cells: cells(h), len: h.len })),
+      shotsAtMe: s.shots[opp],
+      myShots: s.shots[me],
+      enemySunk: (s.ships[opp] || []).filter((h) => cells(h).every((x) => s.shots[me][x] === 2)).map((h) => ({ cells: cells(h), len: h.len })),
+      log: s.log.slice(-5),
+      final: s.winner ? [{ id: s.winner, label: "Fleet survives" }, { id: opp === s.winner ? me : opp, label: "Fleet destroyed" }] : null
+    };
+  },
+  handleAction(s0, pid, a) {
+    const s = structuredClone(s0);
+    if (s.winner) throw new Error("Game over");
+    const opp = s.ids.find((i2) => i2 !== pid);
+    if (s.phase === "place") {
+      if (a.type !== "place" || s.ready[pid]) throw new Error("Already placed");
+      const f = a.random ? randomFleet() : clean(a.ships);
+      if (!f) throw new Error("Invalid ship placement");
+      s.ships[pid] = f;
+      s.ready[pid] = true;
+      if (s.ready[opp]) {
+        s.phase = "battle";
+        s.log.push("Battle begins!");
+      }
+      return s;
+    }
+    if (s.ids[s.turn] !== pid) throw new Error("Not your turn");
+    const i = a.i;
+    if (a.type !== "fire" || !Number.isInteger(i) || i < 0 || i > 99 || s.shots[pid][i] !== 0) throw new Error("Invalid target");
+    const ship = s.ships[opp].find((h) => cells(h).includes(i));
+    s.shots[pid][i] = ship ? 2 : 1;
+    s.log.push(`${pid} fires at ${String.fromCharCode(65 + i % 10)}${Math.floor(i / 10) + 1}: ${ship ? "HIT" : "miss"}`);
+    if (ship && cells(ship).every((x) => s.shots[pid][x] === 2)) s.log.push(`${pid} sinks a ship of length ${ship.len}!`);
+    if (s.ships[opp].every((h) => cells(h).every((x) => s.shots[pid][x] === 2))) {
+      s.winner = pid;
+      return s;
+    }
+    if (!(ship && s.hitAgain)) s.turn = 1 - s.turn;
+    return s;
+  },
+  isGameOver: (s) => !!s.winner,
+  getResults: (s) => ({ winner: s.winner })
+};
+var WORDS = {
+  1: ["cat", "lion", "tiger", "zebra", "panda", "giraffe", "elephant", "kangaroo", "crocodile", "dolphin", "penguin", "rabbit"],
+  2: ["rice", "pizza", "burger", "noodles", "biryani", "pancake", "sandwich", "chocolate", "strawberry", "mushroom", "pineapple", "dumpling"],
+  3: ["india", "japan", "brazil", "canada", "germany", "argentina", "australia", "indonesia", "switzerland", "madagascar", "portugal", "thailand"],
+  4: ["code", "robot", "laptop", "server", "browser", "database", "keyboard", "internet", "algorithm", "javascript", "processor", "cybersecurity"]
+};
+var CATS = ["", "Animals", "Food", "Countries", "Tech"];
+var wg = {
+  id: "wg",
+  minPlayers: 2,
+  maxPlayers: 6,
+  initialize(ids, st) {
+    const cat = Math.min(4, Math.max(1, Number(st.category) || 1)), d = Math.min(3, Math.max(1, Number(st.difficulty) || 2)), team = !!st.team && ids.length >= 2;
+    const all = WORDS[cat], pool = all.filter((w) => d === 1 ? w.length <= 5 : d === 2 ? w.length >= 6 && w.length <= 8 : w.length >= 9), list = pool.length ? pool : all;
+    const sideOf = (i) => team ? i % 2 ? "B" : "A" : ids[i], sides = [...new Set(ids.map((_, i) => sideOf(i)))], lives = [8, 6, 5][d - 1];
+    return { ids, team, word: list[randInt(list.length)], cat: CATS[cat], guessed: [], sideOf: Object.fromEntries(ids.map((id, i) => [id, sideOf(i)])), lives: Object.fromEntries(sides.map((x) => [x, lives])), turn: 0, winnerSide: null, over: false, log: ["Game started"] };
+  },
+  getPlayerView: (s, me) => ({
+    game: "wg",
+    you: me,
+    ids: s.ids,
+    team: s.team,
+    cat: s.cat,
+    len: s.word.length,
+    mask: [...s.word].map((c) => s.guessed.includes(c) || s.over ? c : null),
+    guessed: s.guessed,
+    lives: s.lives,
+    sideOf: s.sideOf,
+    turn: s.over ? null : s.ids[s.turn],
+    log: s.log.slice(-5),
+    final: s.over ? s.ids.map((id) => ({ id, label: s.winnerSide && s.sideOf[id] === s.winnerSide ? `Solved \u201C${s.word}\u201D` : s.winnerSide ? "Out" : `Nobody solved \u201C${s.word}\u201D` })).sort((a, b) => (b.label.startsWith("Solved") ? 1 : 0) - (a.label.startsWith("Solved") ? 1 : 0)) : null
+  }),
+  handleAction(s0, pid, a) {
+    const s = structuredClone(s0);
+    if (s.over) throw new Error("Game over");
+    if (s.ids[s.turn] !== pid) throw new Error("Not your turn");
+    const side = s.sideOf[pid];
+    let right = false;
+    if (a.type === "letter") {
+      const ch = String(a.ch || "").toLowerCase();
+      if (!/^[a-z]$/.test(ch) || s.guessed.includes(ch)) throw new Error("Pick a new letter");
+      s.guessed.push(ch);
+      right = s.word.includes(ch);
+      s.log.push(`${pid} guesses ${ch.toUpperCase()}: ${right ? "correct" : "wrong"}`);
+      if ([...s.word].every((c) => s.guessed.includes(c))) {
+        s.winnerSide = side;
+        s.over = true;
+        return s;
+      }
+    } else if (a.type === "word") {
+      const w = String(a.word || "").toLowerCase().trim();
+      if (!/^[a-z]{1,20}$/.test(w)) throw new Error("Enter a word");
+      if (w === s.word) {
+        s.winnerSide = side;
+        s.over = true;
+        s.log.push(`${pid} solves it!`);
+        return s;
+      }
+      s.log.push(`${pid} guesses the word and is wrong`);
+    } else throw new Error("Unknown action");
+    if (!right) s.lives[side]--;
+    if (Object.values(s.lives).every((x) => x <= 0)) {
+      s.over = true;
+      return s;
+    }
+    if (!right || a.type === "word") for (let k = 1; k <= s.ids.length; k++) {
+      const j2 = (s.turn + k) % s.ids.length;
+      if (s.lives[s.sideOf[s.ids[j2]]] > 0) {
+        s.turn = j2;
+        break;
+      }
+    }
+    else if (s.lives[side] <= 0) for (let k = 1; k <= s.ids.length; k++) {
+      const j2 = (s.turn + k) % s.ids.length;
+      if (s.lives[s.sideOf[s.ids[j2]]] > 0) {
+        s.turn = j2;
+        break;
+      }
+    }
+    return s;
+  },
+  isGameOver: (s) => s.over,
+  getResults: (s) => ({ winnerSide: s.winnerSide })
+};
+
 // server/games/index.ts
-var engines = { blackjack, inbetween, flip7, leastcount, elimination };
+var engines = { blackjack, inbetween, flip7, leastcount, elimination, crazy8, bluff, gofish, ttt, c4, dab, nim, rps, sl, ludo, bs, wg };
 
 // server/room.ts
 var Room = class {
@@ -758,13 +1480,13 @@ async function attempt(code, token, msg, create) {
     delete data.keys[id];
     delete data.seen[id];
   }
-  let ok;
-  if (version < 0) ok = (await fetch(`${URL_}/rest/v1/room_states`, { method: "POST", headers: { ...H, Prefer: "return=minimal" }, body: JSON.stringify({ code, data, version: 0 }) })).ok;
+  let ok2;
+  if (version < 0) ok2 = (await fetch(`${URL_}/rest/v1/room_states`, { method: "POST", headers: { ...H, Prefer: "return=minimal" }, body: JSON.stringify({ code, data, version: 0 }) })).ok;
   else {
     const r = await fetch(`${URL_}/rest/v1/room_states?code=eq.${code}&version=eq.${version}`, { method: "PATCH", headers: { ...H, Prefer: "return=representation" }, body: JSON.stringify({ data, version: version + 1, updated_at: (/* @__PURE__ */ new Date()).toISOString() }) });
-    ok = r.ok && (await r.json()).length > 0;
+    ok2 = r.ok && (await r.json()).length > 0;
   }
-  if (!ok) return null;
+  if (!ok2) return null;
   const pub = [], any = [...outs.values()].find((v) => v.length);
   for (const m of (any || []).map((s) => JSON.parse(s))) if (["room", "chat", "react"].includes(m.t)) pub.push({ topic: `room:${code}`, event: "m", payload: m, private: false });
   for (const [id, list] of outs) {

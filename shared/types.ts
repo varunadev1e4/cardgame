@@ -1,4 +1,4 @@
-export type GameId = 'blackjack' | 'inbetween' | 'flip7' | 'leastcount' | 'elimination';
+export type GameId = string;
 export type RoomStatus = 'waiting' | 'active' | 'completed' | 'closed';
 export interface PublicPlayer { id: string; nickname: string; connected: boolean; isHost: boolean }
 export type ClientMsg =
