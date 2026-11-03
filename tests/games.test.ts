@@ -6,7 +6,7 @@ import { elimination } from '../server/games/elimination';
 import { engines } from '../server/games';
 const c = (r: any) => ({ r, s: 'S' } as any);
 describe('all engines', () => {
-  it('registry has all games', () => expect(Object.keys(engines).length).toBe(17));
+  it('registry has all games', () => expect(Object.keys(engines).length).toBe(18));
   it('inbetween scoring, post penalty, privacy', () => {
     let s = inbetween.initialize(['a', 'b'], { rounds: 3 }); const me = s.ids[s.turn], other = s.ids.find(i => i !== me)!;
     s.pair = [c('3'), c('9')]; s.deck = [...s.deck, c('5')];

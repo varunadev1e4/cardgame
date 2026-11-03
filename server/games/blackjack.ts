@@ -23,7 +23,7 @@ function deal(s: BJ) {
   }
   s.phase = 'player'; s.turn = -1; advance(s);
 }
-function advance(s: BJ) {
+export function advance(s: BJ) {
   s.turn = s.players.findIndex((p, i) => i > s.turn && p.status === 'playing');
   if (s.turn === -1) finish(s);
 }

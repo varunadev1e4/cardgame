@@ -10,7 +10,7 @@ function finish(s: F7) {
   for (const p of s.players) { const r = roundScore(p); p.total += r; s.log.push(`${p.id}: ${p.status} +${r}`); }
   s.phase = Math.max(...s.players.map(p => p.total)) >= s.target || s.round >= s.rounds ? 'over' : 'roundOver';
 }
-function advance(s: F7) {
+export function advance(s: F7) {
   for (let i = 1; i <= s.players.length; i++) { const k = (s.turn + i) % s.players.length; if (s.players[k].status === 'active') { s.turn = k; return; } }
   finish(s);
 }

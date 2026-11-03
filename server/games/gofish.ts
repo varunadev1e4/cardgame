@@ -3,7 +3,7 @@ export interface GF { deck: Card[]; hands: Record<string, Card[]>; books: Record
 function bookUp(s: GF, id: string) {
   for (const r of RANKS) if (s.hands[id].filter(c => c.r === r).length === 4) { s.hands[id] = s.hands[id].filter(c => c.r !== r); s.books[id].push(r); s.log.push(`${id} completes a book of ${r}s`); }
 }
-function settle(s: GF) {
+export function settle(s: GF) {
   for (let k = 0; k <= s.ids.length; k++) {
     if (s.ids.reduce((a, i) => a + s.books[i].length, 0) >= 13) { s.phase = 'over'; return; }
     const id = s.ids[s.turn];

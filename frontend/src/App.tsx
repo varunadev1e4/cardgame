@@ -15,6 +15,7 @@ const GAMES: Record<string, { name: string; set: [string, string, number | boole
   crazy8: { name: 'Crazy Eights', set: [] },
   bluff: { name: 'Bluff (Cheat)', set: [] },
   gofish: { name: 'Go Fish', set: [] },
+  kittens: { name: 'Boom Cats', set: [['fast', 'Faster variant (2-3 players)', true]] },
   ttt: { name: 'Tic-Tac-Toe', set: [] }, c4: { name: 'Connect Four', set: [] },
   dab: { name: 'Dots and Boxes', set: [['size', 'Boxes per side (2-6)', 3]] },
   nim: { name: 'Nim', set: [['piles', 'Piles (2-8)', 4], ['maxTake', 'Max per turn (0 = any)', 0], ['misere', 'Misère: last mover loses', false]] },
@@ -27,9 +28,9 @@ const GAMES: Record<string, { name: string; set: [string, string, number | boole
 function useRoom(code: string, nick: string, create: boolean) {
   const [room, setRoom] = useState<any>(null), [view, setView] = useState<any>(null), [chat, setChat] = useState<any[]>([]);
   const [err, setErr] = useState(''), [me, setMe] = useState(''), [online, setOnline] = useState(false), [flash, setFlash] = useState<any>(null);
-  const seq = useRef(Date.now()), busy = useRef(false), joined = useRef(false);
+  const seq = useRef(Date.now()), busy = useRef(false), joined = useRef(false), names = useRef<any>({});
   const handle = (m: any) => {
-    if (m.t === 'joined') { setMe(m.playerId); setErr(''); } else if (m.t === 'room') setRoom(m); else if (m.t === 'state') setView(m.view);
+    if (m.t === 'joined') { setMe(m.playerId); setErr(''); } else if (m.t === 'room') { setRoom(m); m.players.forEach((p: any) => { names.current[p.id] = p.nickname; }); } else if (m.t === 'state') setView(m.view);
     else if (m.t === 'chat') setChat(c => [...c.slice(-99), m]); else if (m.t === 'error') setErr(m.message);
     else if (m.t === 'react') { setFlash(m); setTimeout(() => setFlash(null), 1800); }
   };
@@ -48,12 +49,14 @@ function useRoom(code: string, nick: string, create: boolean) {
       if (!viewCh) viewCh = sb.channel(`v:${j.viewKey}`).on('broadcast', { event: 'm' }, ({ payload }) => handle(payload)).subscribe();
       joined.current = true; return true;
     };
+    const vis = () => { if (document.visibilityState === 'visible' && joined.current) call({ t: 'ping' }); };
+    document.addEventListener('visibilitychange', vis);
     join().then(ok => { if (ok) hb = setInterval(async () => { const j = await call({ t: 'ping' }); if (!j) joined.current = false; else if (!joined.current) await join(); }, 12000); });
-    return () => { dead = true; clearInterval(hb); sb.removeChannel(roomCh); if (viewCh) sb.removeChannel(viewCh); };
+    return () => { dead = true; document.removeEventListener('visibilitychange', vis); clearInterval(hb); sb.removeChannel(roomCh); if (viewCh) sb.removeChannel(viewCh); };
   }, [code, nick]);
   const send = (m: any) => { call(m); };
   const act = async (action: any) => { if (busy.current) return; busy.current = true; await call({ t: 'action', seq: ++seq.current, action }); busy.current = false; };
-  return { room, view, chat, err, me, online, flash, send, act };
+  return { room, view, chat, err, me, online, flash, send, act, names };
 }
 const Card = ({ c, sel, onClick, sm, hint }: any) => {
   if (!c) return <div className={'card back' + (sm ? ' sm' : '')} />;
@@ -67,8 +70,8 @@ const hue = (s: string) => [...String(s)].reduce((a, c) => a * 31 + c.charCodeAt
 const Av = ({ name, size = 32 }: any) => <span className="av" style={{ width: size, height: size, fontSize: size * 0.45, background: `hsl(${hue(name)} 45% 38%)` }}>{String(name || '?')[0]?.toUpperCase()}</span>;
 const Scores = ({ s, nm, turn }: any) => <div className="row">{Object.entries(s).map(([id, v]: any) => <span className={'pill' + (turn === id ? ' on' : '')} key={id}><Av name={nm(id)} size={22} />{nm(id)} <b>{v}</b></span>)}</div>;
 const Bars = ({ s, max, nm, turn }: any) => <div className="bars">{Object.entries(s).map(([id, x]: any) => <div key={id} className={'bar' + (turn === id ? ' on' : '')}><Av name={nm(id)} size={24} /><span className="bn">{nm(id)}</span><div className="track"><div style={{ width: Math.min(100, Math.max(0, (x / max) * 100)) + '%' }} /></div><b>{x}</b></div>)}</div>;
-const META: Record<string, [string, string]> = { blackjack: ['🂡', 'Beat the dealer to 21'], inbetween: ['🎯', 'Bet a card lands between two others'], flip7: ['🎲', 'Push your luck, bank your points'], leastcount: ['🃏', 'Keep the lowest hand'], elimination: ['💣', 'Dodge bombs, outwit opponents'], crazy8: ['8️⃣', 'Match suit or rank, 8s are wild'], bluff: ['🤥', 'Lie with your cards, catch the liars'], gofish: ['🐟', 'Ask for cards, collect books'], ttt: ['❌', 'Three in a row'], c4: ['🔴', 'Drop discs, connect four'], dab: ['🔲', 'Close boxes, score points'], nim: ['🪨', 'Take stones, make the last move'], rps: ['✊', 'Best-of rock paper scissors'], sl: ['🐍', 'Race to square 100'], ludo: ['🎲', 'Bring four tokens home'], bs: ['🚢', 'Sink the hidden fleet'], wg: ['🔤', 'Guess the secret word'] };
-const ICON: Record<string, string> = { bomb: '💣', defuse: '🧯', skip: '⏭', peek: '👁', shuffle: '🔀', attack: '⚔️' };
+const META: Record<string, [string, string]> = { blackjack: ['🂡', 'Beat the dealer to 21'], inbetween: ['🎯', 'Bet a card lands between two others'], flip7: ['🎲', 'Push your luck, bank your points'], leastcount: ['🃏', 'Keep the lowest hand'], elimination: ['💣', 'Dodge bombs, outwit opponents'], crazy8: ['8️⃣', 'Match suit or rank, 8s are wild'], bluff: ['🤥', 'Lie with your cards, catch the liars'], gofish: ['🐟', 'Ask for cards, collect books'], kittens: ['😼', 'Dodge the bombs, Nope everything'], ttt: ['❌', 'Three in a row'], c4: ['🔴', 'Drop discs, connect four'], dab: ['🔲', 'Close boxes, score points'], nim: ['🪨', 'Take stones, make the last move'], rps: ['✊', 'Best-of rock paper scissors'], sl: ['🐍', 'Race to square 100'], ludo: ['🎲', 'Bring four tokens home'], bs: ['🚢', 'Sink the hidden fleet'], wg: ['🔤', 'Guess the secret word'] };
+const ICON: Record<string, string> = { bomb: '💣', defuse: '🧯', skip: '⏭', peek: '👁', shuffle: '🔀', attack: '⚔️', boom: '💣', nope: '🚫', favor: '🤝', future: '🔮', tabby: '🐱', calico: '😸', siamese: '😺', sphynx: '😼', bengal: '🐯' };
 const RULES: Record<string, string> = {
   blackjack: 'Get closer to 21 than the dealer without going over. Hit draws a card, Stand stops, Double draws exactly one card for double stakes. A two-card 21 pays 1.5.',
   inbetween: 'On your turn you see two cards. Bet that the next card lands strictly between them, or pass. Between: +1. Outside: -1. Matching a card exactly costs extra. Pairs with no gap are skipped automatically.',
@@ -78,6 +81,7 @@ const RULES: Record<string, string> = {
   crazy8: 'Be first to empty your hand. Play a card that matches the top card by suit or rank. 8s are wild and let you pick the suit. A 2 makes the next player draw 2 and lose their turn, a Jack skips the next player. Can’t play? Draw a card; if it fits you may play it.',
   bluff: 'Get rid of all your cards. Each turn you play 1 to 4 cards face down and claim they are the required rank (A, 2, 3, … K, then around again). You may lie! The next player can Call bluff: if you lied you take the whole pile, if you told the truth they take it. Win by playing your last cards without being caught.',
   gofish: 'On your turn, pick a rank you hold and ask another player for it. If they have any, they hand them all over and you go again. If not, “Go Fish” and draw a card. Four of a kind makes a book. Most books wins.',
+  kittens: 'Take turns: play any cards you like (or none), then draw a card to end your turn. Draw a 💣 bomb and you explode, unless you play a 🧯 Defuse and secretly slide the bomb back into the deck. Last cat standing wins. ⚔️ Attack: end your turn, next player takes 2 turns (attacks stack). ⏭ Skip: end your turn without drawing. 🔀 Shuffle. 🔮 Peek at the top 3. 🤝 Favor: a player must give you a card. 🚫 Nope cancels any action (even another Nope) during the short window after it is played. Two matching cards steal a random card from a player; three matching cards let you name the card you want.',
   ttt: 'Take turns placing your mark. Three in a row, column or diagonal wins. A full board is a draw.',
   c4: 'Take turns dropping a disc into a column. The first to line up four discs in a row, column or diagonal wins.',
   dab: 'Take turns drawing a line between two neighbouring dots. Closing the fourth side of a box scores it and gives you another turn. Most boxes wins.',
@@ -308,7 +312,34 @@ function WG({ v, act, nm }: any) {
     <div className="kb">{'abcdefghijklmnopqrstuvwxyz'.split('').map(ch => <button key={ch} className={'ghost sm' + (v.guessed.includes(ch) ? ' used' : '')} disabled={!mine || v.guessed.includes(ch)} onClick={() => act({ type: 'letter', ch })}>{ch.toUpperCase()}</button>)}</div>
     {mine && <div className="row" style={{ justifyContent: 'center' }}><input placeholder="Or guess the whole word" value={w} onChange={e => setW(e.target.value)} /><button disabled={!w.trim()} onClick={() => { act({ type: 'word', word: w }); setW(''); }}>Guess word</button></div>}<Feed log={v.log} nm={nm} /></div>;
 }
-const BOARDS: any = { blackjack: BJ, inbetween: IB, flip7: F7, leastcount: LC, elimination: EL, crazy8: CE, bluff: BL, gofish: GF, ttt: TT, c4: C4, dab: DB, nim: NM, rps: RP, sl: SL, ludo: LU, bs: BS, wg: WG };
+const KFX: Record<string, string> = { defuse: 'Saves you from a bomb', attack: 'End turn, next player takes 2', nope: 'Cancel any action', shuffle: 'Shuffle the deck', skip: 'End turn without drawing', favor: 'A player gives you a card', future: 'Peek at the top 3' };
+function KT({ v, act, nm }: any) {
+  const [sel, setSel] = useState<number[]>([]), [target, setTarget] = useState(''), [name, setName] = useState('tabby'), [pos, setPos] = useState(0);
+  const p = v.pending, mine = v.turn === v.you && v.phase === 'turn', giving = v.phase === 'favor' && v.favor?.from === v.you, alive = v.alive.includes(v.you);
+  useEffect(() => { setSel([]); setTarget(''); }, [v.phase, v.turn, v.hand.length]);
+  useEffect(() => { if (!p) return; const id = setTimeout(() => act({ type: 'resolve' }), p.msLeft + 500); return () => clearTimeout(id); }, [p?.msLeft, p?.nopes, p?.by, v.phase]);
+  const ch = sel.map(i => v.hand[i]), same = ch.length > 0 && ch.every(c => c === ch[0]);
+  const single = ch.length === 1 && ['attack', 'skip', 'shuffle', 'future', 'favor'].includes(ch[0]), combo = ch.length >= 2 && ch.length <= 3 && same;
+  const needT = (single && ch[0] === 'favor') || combo, ready = (single || combo) && (!needT || target);
+  const names = ['tabby', 'calico', 'siamese', 'sphynx', 'bengal', 'defuse', 'attack', 'nope', 'shuffle', 'skip', 'favor', 'future'];
+  const click = (c: string, i: number) => { if (giving) act({ type: 'give', card: c }); else if (mine) setSel(s => s.includes(i) ? s.filter(x => x !== i) : [...s, i]); };
+  return <div className="kt"><Opps v={v} nm={nm} pick={target} onPick={(id: string, n: number) => mine && v.alive.includes(id) && n > 0 && setTarget(id)} extra={(id: string) => v.alive.includes(id) ? '' : ' · 💥 out'} />
+    <div className="table"><div className="pile"><div className="card back" /><small>Deck · {v.deckCount}</small></div><div className="pile">{v.discard[0] ? <span className="fxmini">{ICON[v.discard[0]]}<small>{v.discard[0]}</small></span> : <span className="fxmini">–</span>}<small>Last played</small></div></div>
+    {p && <div className="banner pend">{nm(p.by)} played {p.cards.map((c: string) => `${ICON[c]} ${c}`).join(' + ')}{p.target && ` on ${nm(p.target)}`}{p.nopes > 0 && ` · Noped ×${p.nopes}`}
+      <div className="countbar"><div key={p.nopes + p.by} style={{ animationDuration: p.msLeft + 'ms' }} /></div>
+      {alive && <div className="row">{v.hand.includes('nope') && <button className="danger" onClick={() => act({ type: 'nope' })}>🚫 Nope!</button>}{p.canAllow && <button onClick={() => act({ type: 'allow' })}>Allow</button>}</div>}</div>}
+    {v.phase === 'favor' && <div className="banner">{giving ? `Give a card to ${nm(v.favor.to)}: tap one in your hand` : `${nm(v.favor.from)} must give a card to ${nm(v.favor.to)}`}</div>}
+    {v.phase === 'reinsert' && (v.turn === v.you ? <div className="banner">You defused it! Hide the bomb: {pos === 0 ? 'on top (next draw!)' : pos >= v.deckCount ? 'at the very bottom' : `${pos} cards down`}<div className="row"><input type="range" min={0} max={v.deckCount} value={pos} onChange={e => setPos(+e.target.value)} /><button className="primary" onClick={() => act({ type: 'reinsert', pos })}>Hide it</button></div></div> : <div className="banner">{nm(v.turn)} is hiding a bomb…</div>)}
+    {v.peek && <p className="hint-line mine">Top 3 (next card first): {v.peek.map((c: string) => `${ICON[c]} ${c}`).join('  →  ')}</p>}
+    {mine && <p className="hint-line mine">{v.owed > 1 ? `You must take ${v.owed} turns. ` : ''}Play cards (tap to select), or just draw.</p>}
+    {alive && <div className="hand">{v.hand.map((c: string, i: number) => <button key={i} disabled={!(mine || giving)} className={'fxcard ' + c + (sel.includes(i) ? ' selc' : '')} onClick={() => click(c, i)}><span className="gi">{ICON[c]}</span><b>{c}</b><small>{KFX[c] || 'Cat: play 2 or 3 alike'}</small></button>)}</div>}
+    {!alive && <div className="banner">You exploded. Watch the rest of the game.</div>}
+    {mine && <div className="actions">{(single || combo) && <>{combo && ch.length === 3 && <select value={name} onChange={e => setName(e.target.value)}>{names.map(n => <option key={n} value={n}>{n}</option>)}</select>}
+      <button className="gold big" disabled={!ready} onClick={() => act(single ? { type: 'play', card: ch[0], target } : { type: 'combo', card: ch[0], count: ch.length, target, name })}>{needT && !target ? 'Tap a player to target' : single ? `Play ${ch[0]}` : `Play ${ch.length} ${ch[0]}s`}</button></>}
+      <button className="primary big" onClick={() => act({ type: 'draw' })}>Draw a card (ends turn)</button></div>}
+    <Feed log={v.log} nm={nm} /></div>;
+}
+const BOARDS: any = { blackjack: BJ, inbetween: IB, flip7: F7, leastcount: LC, elimination: EL, crazy8: CE, bluff: BL, gofish: GF, ttt: TT, c4: C4, dab: DB, nim: NM, rps: RP, sl: SL, ludo: LU, bs: BS, wg: WG, kittens: KT };
 function Lobby({ r, me, send, nm }: any) {
   const host = r.players.find((p: any) => p.id === me)?.isHost, g = GAMES[r.game];
   const set: any = { ...Object.fromEntries(g.set.map(([k, , d]) => [k, d])), ...r.settings };
@@ -323,22 +354,23 @@ function Lobby({ r, me, send, nm }: any) {
     {host ? <button className="primary big" onClick={() => send({ t: 'start' })}>Start game</button> : <p className="muted center">Waiting for the host to start…</p>}</div>;
 }
 function Room({ code, nick, create, leave }: any) {
-  const { room, view, chat, err, me, online, flash, send, act } = useRoom(code, nick, create);
+  const { room, view, chat, err, me, online, flash, send, act, names } = useRoom(code, nick, create);
   const [txt, setTxt] = useState(''), [help, setHelp] = useState(false), [chatOpen, setChatOpen] = useState(false);
-  const nm = (id: string) => room?.players.find((p: any) => p.id === id)?.nickname ?? String(id).slice(0, 4);
+  const nm = (id: string) => room?.players.find((p: any) => p.id === id)?.nickname ?? names.current[id] ?? String(id).slice(0, 4);
   const Board = room && BOARDS[room.game], host = room?.players.find((p: any) => p.id === me)?.isHost;
   const turn = room?.status === 'active' ? view?.turn : null, mineTurn = !!turn && turn === me;
   useEffect(() => { if (mineTurn) navigator.vibrate?.(120); }, [mineTurn]);
   const link = `${location.origin}/?room=${code}`;
   return <div className="wrap"><div className="top"><h2>Room <span className="code sm">{code}</span></h2><div className="row"><span className={'chip ' + (online ? 'ok' : 'bad')}>{online ? 'Connected' : 'Reconnecting…'}</span>
     {room && <button className="ghost" onClick={() => setHelp(true)}>How to play</button>}<button className="ghost" onClick={() => navigator.clipboard?.writeText(link)}>Invite</button>
-    <button className="ghost chatbtn" onClick={() => setChatOpen(o => !o)}>Chat {chat.length}</button><button className="ghost" onClick={leave}>Leave</button></div></div>
+    <button className="ghost chatbtn" onClick={() => setChatOpen(o => !o)}>Chat {chat.length}</button><button className="ghost" onClick={() => { send({ t: 'leave' }); setTimeout(leave, 300); }}>Leave</button></div></div>
     {err && <div className="err">{err}</div>}{flash && <div className="flash">{nm(flash.from)} {flash.emoji}</div>}
     {turn && <div className={'turnbar' + (mineTurn ? ' mine' : '')}>{mineTurn ? 'Your turn' : `${nm(turn)} is playing…`}</div>}
     {help && room && <div className="modal" onClick={() => setHelp(false)}><div className="mbox"><h3>{GAMES[room.game].name}</h3><p>{RULES[room.game]}</p><button className="primary" onClick={() => setHelp(false)}>Got it</button></div></div>}
     <div className="layout"><div>{!room ? <p className="muted">Connecting…</p> : room.status === 'waiting' ? <Lobby r={room} me={me} send={send} nm={nm} /> :
-      <div className="panel board">{room.status === 'completed' && view && <><Podium g={room.game} v={view} nm={nm} />{host ? <div className="actions"><button className="primary big" onClick={() => send({ t: 'rematch' })}>Play again</button></div> : <p className="muted center">Waiting for the host to start a rematch.</p>}</>}
-        {view ? <Board v={view} act={act} nm={nm} /> : <p>Loading…</p>}</div>}</div>
+      <div className="panel board">{room.abandoned && <><div className="banner">The game ended because too many players left.</div>{host ? <div className="actions"><button className="primary big" onClick={() => send({ t: 'rematch' })}>Play again</button><button className="big" onClick={() => send({ t: 'lobby' })}>Back to lobby</button></div> : <p className="muted center">Waiting for the host.</p>}</>}
+        {room.status === 'completed' && view && !room.abandoned && <><Podium g={room.game} v={view} nm={nm} />{host ? <div className="actions"><button className="primary big" onClick={() => send({ t: 'rematch' })}>Play again</button><button className="big" onClick={() => send({ t: 'lobby' })}>Back to lobby</button></div> : <p className="muted center">Waiting for the host to start a rematch.</p>}</>}
+        {view && !room.abandoned ? <Board v={view} act={act} nm={nm} /> : !view && <p>Loading…</p>}</div>}</div>
       <div className={'panel side' + (chatOpen ? ' open' : '')}><h4>Players</h4>{room?.players.map((p: any) => <div className="pl" key={p.id}><Av name={p.nickname} size={24} />{p.nickname}{p.isHost ? ' (host)' : ''}<span className="grow" /><span className={'dot' + (p.connected ? ' on' : '')} /></div>)}
         <h4>Chat</h4><div className="chat">{chat.map((m, i) => <div key={i} className={m.system ? 'sys' : ''}>{m.system ? '' : <b>{m.from}: </b>}{m.text}</div>)}</div>
         <div className="row">{EMOJI.map(e => <button key={e} className="ghost sm" onClick={() => send({ t: 'react', emoji: e })}>{e}</button>)}</div>

@@ -19,6 +19,19 @@ var SUITS = ["S", "H", "D", "C"];
 var newDeck = () => shuffle(SUITS.flatMap((s) => RANKS.map((r) => ({ r, s }))));
 var sortHand = (h) => h.sort((a, b) => RANKS.indexOf(a.r) - RANKS.indexOf(b.r) || SUITS.indexOf(a.s) - SUITS.indexOf(b.s));
 var finalTwo = (ids, w) => w ? [{ id: w, label: "Winner" }, ...ids.filter((i) => i !== w).map((id) => ({ id, label: "Runner-up" }))] : ids.map((id) => ({ id, label: "Draw" }));
+function dropId(s, id) {
+  const i = s.ids ? s.ids.indexOf(id) : -1;
+  for (const k of Object.keys(s)) {
+    const v = s[k];
+    if (Array.isArray(v)) s[k] = v.filter((x) => x !== id && x?.id !== id);
+    else if (v && typeof v === "object" && id in v) delete v[id];
+  }
+  if (i >= 0 && typeof s.turn === "number") {
+    if (i < s.turn) s.turn--;
+    if (s.turn >= s.ids.length) s.turn = 0;
+  }
+  return s;
+}
 
 // server/games/blackjack.ts
 var value = (h) => {
@@ -1238,8 +1251,309 @@ var wg = {
   getResults: (s) => ({ winnerSide: s.winnerSide })
 };
 
+// server/games/kittens.ts
+var CATS2 = ["tabby", "calico", "siamese", "sphynx", "bengal"];
+var ALL = [...CATS2, "defuse", "attack", "nope", "shuffle", "skip", "favor", "future"];
+var WIN = 5e3;
+var rep = (n, c) => Array(c).fill(n);
+function adv2(s) {
+  do
+    s.turn = (s.turn + 1) % s.ids.length;
+  while (!s.alive.includes(s.ids[s.turn]));
+  s.owed = 1;
+  s.stack = false;
+  s.phase = "turn";
+}
+var endDraw = (s) => {
+  s.peeks = {};
+  if (--s.owed <= 0) adv2(s);
+  else s.phase = "turn";
+};
+function boom(s, id) {
+  s.discard.push(...s.hands[id]);
+  s.hands[id] = [];
+  s.alive = s.alive.filter((x) => x !== id);
+  s.out.push(id);
+  s.log.push(`${id} explodes!`);
+  if (s.alive.length === 1) {
+    s.winner = s.alive[0];
+    s.phase = "over";
+  } else adv2(s);
+}
+function resolve(s) {
+  const p = s.pending;
+  s.pending = void 0;
+  s.phase = "turn";
+  const by = p.by, c = p.cards[0];
+  if (p.nopes % 2) {
+    s.log.push(`${p.cards.join(" + ")} was stopped by a Nope`);
+    return;
+  }
+  if (p.kind === "card") {
+    if (c === "attack") {
+      const t = (s.stack ? s.owed : 0) + 2;
+      adv2(s);
+      s.owed = t;
+      s.stack = true;
+      s.log.push(`${by} attacks! The next player must take ${t} turns`);
+    } else if (c === "skip") {
+      s.log.push(`${by} skips their draw`);
+      if (--s.owed <= 0) adv2(s);
+    } else if (c === "shuffle") {
+      s.deck = shuffle(s.deck);
+      s.peeks = {};
+      s.log.push(`${by} shuffles the deck`);
+    } else if (c === "future") {
+      s.peeks[by] = s.deck.slice(-3).reverse();
+      s.log.push(`${by} peeks at the future`);
+    } else if (c === "favor" && s.hands[p.target].length) {
+      s.phase = "favor";
+      s.favor = { from: p.target, to: by };
+      s.log.push(`${p.target} must give a card to ${by}`);
+    }
+  } else {
+    const t = s.hands[p.target];
+    if (p.cards.length === 2) {
+      if (t.length) {
+        s.hands[by].push(...t.splice(randInt(t.length), 1));
+        s.log.push(`${by} steals a random card from ${p.target}`);
+      }
+    } else {
+      const i = t.indexOf(p.name);
+      if (i >= 0) {
+        s.hands[by].push(...t.splice(i, 1));
+        s.log.push(`${by} names ${p.name} and takes it from ${p.target}`);
+      } else s.log.push(`${by} names ${p.name}, but ${p.target} has none`);
+    }
+  }
+}
+var kittens = {
+  id: "kittens",
+  minPlayers: 2,
+  maxPlayers: 5,
+  initialize(ids, st) {
+    const n = ids.length;
+    let deck = shuffle([...rep("attack", 4), ...rep("nope", 5), ...rep("shuffle", 4), ...rep("skip", 4), ...rep("favor", 4), ...rep("future", 5), ...CATS2.flatMap((c) => rep(c, 4))]);
+    const hands = Object.fromEntries(ids.map((i) => [i, ["defuse"]]));
+    for (let k = 0; k < 7; k++) for (const i of ids) hands[i].push(deck.pop());
+    deck.push(...rep("defuse", Math.min(2, 6 - n)));
+    deck = shuffle(deck);
+    if (n <= 3 && st.fast !== false) deck = deck.slice(Math.floor(deck.length / 3));
+    deck = shuffle([...deck, ...rep("boom", n - 1)]);
+    return { ids, alive: [...ids], out: [], hands, deck, discard: [], turn: 0, owed: 1, stack: false, phase: "turn", peeks: {}, log: ["Game started"] };
+  },
+  getPlayerView(s, me) {
+    const p = s.pending;
+    return {
+      game: "kittens",
+      you: me,
+      ids: s.ids,
+      phase: s.phase,
+      turn: s.phase === "over" || s.phase === "pending" ? null : s.phase === "favor" ? s.favor.from : s.ids[s.turn],
+      owed: s.owed,
+      hand: s.hands[me] ?? [],
+      counts: Object.fromEntries(s.ids.map((i) => [i, s.hands[i].length])),
+      deckCount: s.deck.length,
+      discard: s.discard.slice(-1),
+      alive: s.alive,
+      out: s.out,
+      peek: s.peeks[me] ?? null,
+      pending: p ? { by: p.by, cards: p.cards, kind: p.kind, target: p.target ?? null, nopes: p.nopes, msLeft: Math.max(0, p.deadline - Date.now()), canAllow: s.alive.includes(me) && me !== p.last && !p.passed.includes(me) } : null,
+      favor: s.favor ?? null,
+      log: s.log.slice(-8),
+      winner: s.winner ?? null,
+      final: s.winner ? [s.winner, ...[...s.out].reverse()].map((id, i) => ({ id, label: i === 0 ? "Last cat standing" : "Exploded" })) : null
+    };
+  },
+  handleAction(s0, pid, a) {
+    if ((a.type === "resolve" || a.type === "allow") && s0.phase !== "pending") return s0;
+    const s = structuredClone(s0), now = Date.now();
+    if (s.phase === "over") throw new Error("Game over");
+    if (!s.alive.includes(pid)) throw new Error("You are out");
+    const me = s.hands[pid], take = (name) => {
+      const i = me.indexOf(name);
+      if (i < 0) throw new Error(`You don't have ${name}`);
+      me.splice(i, 1);
+      s.discard.push(name);
+    };
+    if (s.phase === "pending") {
+      const p = s.pending;
+      if (a.type === "nope") {
+        take("nope");
+        p.nopes++;
+        p.last = pid;
+        p.passed = [];
+        p.deadline = now + WIN;
+        s.log.push(`${pid} plays NOPE`);
+      } else if (a.type === "allow") {
+        if (pid !== p.last && !p.passed.includes(pid)) p.passed.push(pid);
+        if (s.alive.every((x) => x === p.last || p.passed.includes(x))) resolve(s);
+      } else if (a.type === "resolve") {
+        if (now >= p.deadline) resolve(s);
+      } else throw new Error("Wait for the action to resolve");
+      return s;
+    }
+    if (s.phase === "favor") {
+      if (a.type !== "give" || pid !== s.favor.from) throw new Error("Waiting for the favor");
+      const i = me.indexOf(a.card);
+      if (i < 0) throw new Error("Choose a card you hold");
+      s.hands[s.favor.to].push(...me.splice(i, 1));
+      s.favor = void 0;
+      s.phase = "turn";
+      return s;
+    }
+    if (pid !== s.ids[s.turn]) throw new Error("Not your turn");
+    if (s.phase === "reinsert") {
+      if (a.type !== "reinsert") throw new Error("Put the bomb back first");
+      const pos = Math.min(s.deck.length, Math.max(0, Number(a.pos) | 0));
+      s.deck.splice(s.deck.length - pos, 0, "boom");
+      s.log.push(`${pid} hides the bomb in the deck`);
+      endDraw(s);
+      return s;
+    }
+    if (a.type === "draw") {
+      const c = s.deck.pop();
+      s.peeks = {};
+      if (c !== "boom") {
+        me.push(c);
+        endDraw(s);
+      } else if (me.includes("defuse")) {
+        take("defuse");
+        s.log.push(`${pid} defuses the bomb`);
+        s.phase = "reinsert";
+      } else boom(s, pid);
+      return s;
+    }
+    const target = (t) => {
+      if (!s.alive.includes(t) || t === pid || !s.hands[t].length) throw new Error("Pick another player who has cards");
+      return t;
+    };
+    const open = (cards, extra) => {
+      s.pending = { by: pid, cards, deadline: now + WIN, nopes: 0, passed: [], last: pid, ...extra };
+      s.phase = "pending";
+      s.log.push(`${pid} plays ${cards.join(" + ")}`);
+    };
+    if (a.type === "play") {
+      const c = String(a.card);
+      if (!["attack", "skip", "shuffle", "future", "favor"].includes(c)) throw new Error("That card can't be played alone");
+      const t = c === "favor" ? target(a.target) : void 0;
+      take(c);
+      open([c], { kind: "card", target: t });
+      return s;
+    }
+    if (a.type === "combo") {
+      const c = String(a.card), n = a.count === 3 ? 3 : 2;
+      if (!ALL.includes(c) || me.filter((x) => x === c).length < n) throw new Error("You need matching cards");
+      const t = target(a.target);
+      if (n === 3 && !ALL.includes(a.name)) throw new Error("Name a card");
+      for (let k = 0; k < n; k++) take(c);
+      open(Array(n).fill(c), { kind: "combo", target: t, name: a.name });
+      return s;
+    }
+    throw new Error("Unknown action");
+  },
+  isGameOver: (s) => s.phase === "over",
+  getResults: (s) => ({ winner: s.winner })
+};
+
+// server/games/leave.ts
+var wrap = (f) => (s0, id) => {
+  const s = structuredClone(s0);
+  f(s, id);
+  return s;
+};
+blackjack.removePlayer = wrap((s, id) => {
+  const i = s.players.findIndex((p) => p.id === id);
+  if (i < 0) return;
+  s.players.splice(i, 1);
+  if (!s.players.length) {
+    s.phase = "over";
+    return;
+  }
+  if (s.phase === "player") {
+    if (i < s.turn) s.turn--;
+    else if (i === s.turn) {
+      s.turn = i - 1;
+      advance(s);
+    }
+  }
+});
+flip7.removePlayer = wrap((s, id) => {
+  const i = s.players.findIndex((p) => p.id === id);
+  if (i < 0) return;
+  s.players.splice(i, 1);
+  if (i < s.turn) s.turn--;
+  else if (i === s.turn && s.phase === "play") {
+    s.turn = i - 1;
+    advance2(s);
+  }
+  if (s.turn >= s.players.length || s.turn < 0) s.turn = 0;
+});
+inbetween.removePlayer = wrap(dropId);
+sl.removePlayer = wrap(dropId);
+wg.removePlayer = wrap(dropId);
+leastcount.removePlayer = wrap((s, id) => {
+  const was = s.ids[s.turn] === id;
+  dropId(s, id);
+  if (was) s.tp = "start";
+});
+crazy8.removePlayer = wrap((s, id) => {
+  const was = s.ids[s.turn] === id;
+  dropId(s, id);
+  if (was) s.drew = false;
+});
+ludo.removePlayer = wrap((s, id) => {
+  const was = s.ids[s.turn] === id;
+  dropId(s, id);
+  if (was) {
+    s.phase = "roll";
+    s.legal = [];
+  }
+});
+bluff.removePlayer = wrap((s, id) => {
+  if (s.last?.by === id) s.last = void 0;
+  if (s.pendingWin === id) s.pendingWin = void 0;
+  dropId(s, id);
+});
+gofish.removePlayer = wrap((s, id) => {
+  dropId(s, id);
+  if (s.phase === "play") settle(s);
+});
+elimination.removePlayer = wrap((s, id) => {
+  dropId(s, id);
+  s.owed = 1;
+  if (s.alive.length <= 1) {
+    s.phase = "over";
+    return;
+  }
+  while (!s.alive.includes(s.ids[s.turn])) s.turn = (s.turn + 1) % s.ids.length;
+});
+kittens.removePlayer = wrap((s, id) => {
+  if (!s.alive.includes(id)) return;
+  const wasTurn = s.ids[s.turn] === id;
+  s.discard.push(...s.hands[id]);
+  s.hands[id] = [];
+  s.alive = s.alive.filter((x) => x !== id);
+  s.out.push(id);
+  if (s.phase === "reinsert" && wasTurn) s.deck.splice(randInt(s.deck.length + 1), 0, "boom");
+  if (s.favor && (s.favor.from === id || s.favor.to === id)) {
+    s.favor = void 0;
+    s.phase = "turn";
+  }
+  if (s.pending?.by === id || s.pending?.target === id) {
+    s.pending = void 0;
+    s.phase = "turn";
+  }
+  if (s.alive.length <= 1) {
+    s.winner = s.alive[0];
+    s.phase = "over";
+    return;
+  }
+  if (wasTurn) adv2(s);
+});
+
 // server/games/index.ts
-var engines = { blackjack, inbetween, flip7, leastcount, elimination, crazy8, bluff, gofish, ttt, c4, dab, nim, rps, sl, ludo, bs, wg };
+var engines = { blackjack, inbetween, flip7, leastcount, elimination, crazy8, bluff, gofish, ttt, c4, dab, nim, rps, sl, ludo, bs, wg, kittens };
 
 // server/room.ts
 var Room = class {
@@ -1255,6 +1569,7 @@ var Room = class {
   status = "waiting";
   game = "blackjack";
   settings = {};
+  abandoned = false;
   members = [];
   hostId = "";
   code = "";
@@ -1283,11 +1598,11 @@ var Room = class {
     return this.members.map((m) => ({ id: m.id, nickname: m.nickname, connected: m.connected, isHost: m.id === this.hostId }));
   }
   async save() {
-    await this.ctx.storage.put("room", { state: this.state, status: this.status, game: this.game, settings: this.settings, members: this.members, hostId: this.hostId, code: this.code });
+    await this.ctx.storage.put("room", { state: this.state, status: this.status, game: this.game, settings: this.settings, members: this.members, hostId: this.hostId, code: this.code, abandoned: this.abandoned });
   }
   broadcast() {
     for (const [ws, id] of this.sockets) {
-      this.send(ws, { t: "room", code: this.code, status: this.status, game: this.game, settings: this.settings, players: this.pub() });
+      this.send(ws, { t: "room", code: this.code, status: this.status, game: this.game, settings: this.settings, players: this.pub(), abandoned: this.abandoned });
       if (this.state) this.send(ws, { t: "state", view: engines[this.game].getPlayerView(this.state, id) });
     }
   }
@@ -1322,6 +1637,7 @@ var Room = class {
           if (ids.length < e.minPlayers || ids.length > e.maxPlayers) throw new Error(`Needs ${e.minPlayers}-${e.maxPlayers} players`);
           this.state = e.initialize(ids, this.settings);
           this.status = "active";
+          this.abandoned = false;
           this.lastSeq.clear();
           this.sys("Game started");
           break;
@@ -1332,7 +1648,7 @@ var Room = class {
             this.sockets.delete(w);
             w.close(4e3, "removed");
           }
-          this.members = this.members.filter((x) => x.id !== m.playerId);
+          this.dropMembers([m.playerId]);
           break;
         case "action": {
           if (this.status !== "active") throw new Error("No active game");
@@ -1346,6 +1662,20 @@ var Room = class {
           }
           break;
         }
+        case "leave": {
+          this.dropMembers([id]);
+          this.sockets.delete(ws);
+          await this.save();
+          this.broadcast();
+          return;
+        }
+        case "lobby":
+          if (!isHost || this.status !== "completed") throw new Error("Host only, after the game");
+          this.status = "waiting";
+          this.state = null;
+          this.abandoned = false;
+          this.sys("Back to the lobby");
+          break;
         case "chat": {
           const t = String(m.text).replace(/[\u0000-\u001f<>]/g, "").slice(0, 300).trim();
           if (!t) return;
@@ -1363,6 +1693,24 @@ var Room = class {
     } catch (e) {
       this.send(ws, { t: "error", message: e.message ?? "Error" });
     }
+  }
+  /** Remove players (left, kicked or timed out). Mid-game the engine removes them if it can; otherwise the game is abandoned. */
+  dropMembers(ids) {
+    const gone = this.members.filter((m) => ids.includes(m.id));
+    if (!gone.length) return [];
+    this.members = this.members.filter((m) => !ids.includes(m.id));
+    for (const [w, pid] of [...this.sockets]) if (ids.includes(pid)) this.sockets.delete(w);
+    if (ids.includes(this.hostId)) this.hostId = (this.members.find((m) => m.connected) ?? this.members[0])?.id ?? "";
+    const e = engines[this.game];
+    if (this.status === "active" && this.state) {
+      for (const m of gone) if (e.removePlayer && !e.isGameOver(this.state)) this.state = e.removePlayer(this.state, m.id);
+      if (e.isGameOver(this.state)) this.status = "completed";
+      else if (this.members.length < e.minPlayers) {
+        this.status = "completed";
+        this.abandoned = true;
+      }
+    }
+    return gone.map((m) => m.nickname);
   }
   async join(ws, m) {
     const nick = String(m.nickname).replace(/[^\p{L}\p{N} _-]/gu, "").trim().slice(0, 16);
@@ -1420,7 +1768,7 @@ var H = { apikey: KEY, Authorization: `Bearer ${KEY}`, "content-type": "applicat
 var cors = { "Access-Control-Allow-Origin": ORIGIN, "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
 var j = (b, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, "content-type": "application/json" } });
 var STALE = 45e3;
-var roomMsg = (r) => ({ t: "room", code: r.code, status: r.status, game: r.game, settings: r.settings, players: r.pub() });
+var roomMsg = (r) => ({ t: "room", code: r.code, status: r.status, game: r.game, settings: r.settings, players: r.pub(), abandoned: r.abandoned });
 async function attempt(code, token, msg, create) {
   const rows = await (await fetch(`${URL_}/rest/v1/room_states?code=eq.${code}&select=data,version`, { headers: H })).json();
   let data, version = -1;
@@ -1445,13 +1793,15 @@ async function attempt(code, token, msg, create) {
   if (!mm && msg.t !== "join") return { msgs: [{ t: "error", message: "Not joined to this room" }] };
   const now = Date.now();
   if (mm) data.seen[mm.id] = now;
+  const after = room.status === "active" ? 75e3 : room.status === "waiting" ? 12e4 : 3e5;
+  const removed = room.dropMembers(room.members.filter((m) => m.id !== mm?.id && now - (data.seen[m.id] || 0) > after).map((m) => m.id));
   for (const m of room.members) m.connected = m.id === mm?.id || now - (data.seen[m.id] || 0) < STALE;
   const host = room.members.find((m) => m.id === room.hostId);
   if (!host?.connected) {
     const n = room.members.find((m) => m.connected);
     if (n) room.hostId = n.id;
   }
-  const changed = was !== room.members.map((m) => m.connected).join() + room.hostId;
+  const changed = removed.length > 0 || was !== room.members.map((m) => m.connected).join() + room.hostId;
   const outs = /* @__PURE__ */ new Map();
   const mk2 = (id) => {
     const a = [];
@@ -1462,6 +1812,7 @@ async function attempt(code, token, msg, create) {
   for (const m of room.members) if (m.id !== mm?.id) room.sockets.set(mk2(m.id), m.id);
   const cf = mk2("#");
   if (mm) room.sockets.set(cf, mm.id);
+  removed.forEach((n) => room.sys(`${n} was removed for inactivity`));
   if (msg.t === "ping") {
     if (changed) {
       await room.save();

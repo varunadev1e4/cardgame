@@ -8,7 +8,7 @@ const H = { apikey: KEY, Authorization: `Bearer ${KEY}`, 'content-type': 'applic
 const cors = { 'Access-Control-Allow-Origin': ORIGIN, 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
 const j = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, 'content-type': 'application/json' } });
 const STALE = 45000; // a player with no heartbeat for 45s shows as disconnected
-const roomMsg = (r: Room) => ({ t: 'room', code: r.code, status: r.status, game: r.game, settings: r.settings, players: r.pub() });
+const roomMsg = (r: Room) => ({ t: 'room', code: r.code, status: r.status, game: r.game, settings: r.settings, players: r.pub(), abandoned: r.abandoned });
 
 async function attempt(code: string, token: string, msg: any, create: boolean): Promise<any> {
   const rows = await (await fetch(`${URL_}/rest/v1/room_states?code=eq.${code}&select=data,version`, { headers: H })).json();
@@ -25,14 +25,18 @@ async function attempt(code: string, token: string, msg: any, create: boolean): 
   const hash = await room.hashTok(token), mm = room.members.find(m => m.hash === hash);
   if (!mm && msg.t !== 'join') return { msgs: [{ t: 'error', message: 'Not joined to this room' }] };
   const now = Date.now(); if (mm) data.seen[mm.id] = now;
+  // Players with no heartbeat for a while are removed: 75s mid-game, 2 min in the lobby, 5 min after a game ends.
+  const after = room.status === 'active' ? 75000 : room.status === 'waiting' ? 120000 : 300000;
+  const removed = room.dropMembers(room.members.filter(m => m.id !== mm?.id && now - (data.seen[m.id] || 0) > after).map(m => m.id));
   for (const m of room.members) m.connected = m.id === mm?.id || now - (data.seen[m.id] || 0) < STALE;
   const host = room.members.find(m => m.id === room.hostId);
   if (!host?.connected) { const n = room.members.find(m => m.connected); if (n) room.hostId = n.id; }
-  const changed = was !== room.members.map(m => m.connected).join() + room.hostId;
+  const changed = removed.length > 0 || was !== room.members.map(m => m.connected).join() + room.hostId;
   const outs = new Map<string, string[]>();
   const mk = (id: string) => { const a: string[] = []; outs.set(id, a); return { send: (s: string) => a.push(s), close() {} } as any; };
   for (const m of room.members) if (m.id !== mm?.id) room.sockets.set(mk(m.id), m.id);
   const cf = mk('#'); if (mm) room.sockets.set(cf, mm.id);
+  removed.forEach(n => room.sys(`${n} was removed for inactivity`));
   if (msg.t === 'ping') { if (changed) { await room.save(); room.broadcast(); } } else await room.onMsg(cf, JSON.stringify(msg));
   const mine = (outs.get('#') || []).map(s => JSON.parse(s));
   if (!data.room) return { msgs: mine };

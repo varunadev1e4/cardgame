@@ -2,7 +2,7 @@ import type { ClientMsg, ServerMsg, PublicPlayer, GameId, RoomStatus } from '../
 import { engines } from './games';
 interface Member { id: string; nickname: string; hash: string; connected: boolean }
 export class Room {
-  state: any = null; status: RoomStatus = 'waiting'; game: GameId = 'blackjack'; settings: any = {};
+  state: any = null; status: RoomStatus = 'waiting'; game: GameId = 'blackjack'; settings: any = {}; abandoned = false;
   members: Member[] = []; hostId = ''; code = ''; lastSeq = new Map<string, number>();
   sockets = new Map<WebSocket, string>();
   constructor(private ctx: DurableObjectState, private env: any) {
@@ -23,10 +23,10 @@ export class Room {
   }
   send(ws: WebSocket, m: ServerMsg) { try { ws.send(JSON.stringify(m)); } catch {} }
   pub(): PublicPlayer[] { return this.members.map(m => ({ id: m.id, nickname: m.nickname, connected: m.connected, isHost: m.id === this.hostId })); }
-  async save() { await this.ctx.storage.put('room', { state: this.state, status: this.status, game: this.game, settings: this.settings, members: this.members, hostId: this.hostId, code: this.code }); }
+  async save() { await this.ctx.storage.put('room', { state: this.state, status: this.status, game: this.game, settings: this.settings, members: this.members, hostId: this.hostId, code: this.code, abandoned: this.abandoned }); }
   broadcast() {
     for (const [ws, id] of this.sockets) {
-      this.send(ws, { t: 'room', code: this.code, status: this.status, game: this.game, settings: this.settings, players: this.pub() });
+      this.send(ws, { t: 'room', code: this.code, status: this.status, game: this.game, settings: this.settings, players: this.pub(), abandoned: this.abandoned });
       if (this.state) this.send(ws, { t: 'state', view: engines[this.game].getPlayerView(this.state, id) });
     }
   }
@@ -48,12 +48,12 @@ export class Room {
           if (m.t === 'rematch' && this.status !== 'completed') throw new Error('Game not finished');
           const e = engines[this.game], ids = this.members.filter(x => x.connected).map(x => x.id);
           if (ids.length < e.minPlayers || ids.length > e.maxPlayers) throw new Error(`Needs ${e.minPlayers}-${e.maxPlayers} players`);
-          this.state = e.initialize(ids, this.settings); this.status = 'active'; this.lastSeq.clear(); this.sys('Game started'); break;
+          this.state = e.initialize(ids, this.settings); this.status = 'active'; this.abandoned = false; this.lastSeq.clear(); this.sys('Game started'); break;
         }
         case 'kick':
           if (!isHost || m.playerId === id) throw new Error('Not allowed');
           for (const [w, pid] of this.sockets) if (pid === m.playerId) { this.sockets.delete(w); w.close(4000, 'removed'); }
-          this.members = this.members.filter(x => x.id !== m.playerId); break;
+          this.dropMembers([m.playerId]); break;
         case 'action': {
           if (this.status !== 'active') throw new Error('No active game');
           if (!Number.isInteger(m.seq) || m.seq <= (this.lastSeq.get(id) ?? -1)) throw new Error('Duplicate action');
@@ -61,11 +61,29 @@ export class Room {
           const e = engines[this.game]; this.state = e.handleAction(this.state, id, m.action);
           if (e.isGameOver(this.state)) { this.status = 'completed'; this.sys('Game over'); } break;
         }
+        case 'leave': { this.dropMembers([id]); this.sockets.delete(ws); await this.save(); this.broadcast(); return; }
+        case 'lobby':
+          if (!isHost || this.status !== 'completed') throw new Error('Host only, after the game');
+          this.status = 'waiting'; this.state = null; this.abandoned = false; this.sys('Back to the lobby'); break;
         case 'chat': { const t = String(m.text).replace(/[\u0000-\u001f<>]/g, '').slice(0, 300).trim(); if (!t) return; const n = this.members.find(x => x.id === id)!.nickname; for (const w of this.sockets.keys()) this.send(w, { t: 'chat', from: n, text: t }); return; }
         case 'react': if (!['👍','😂','😮','😢','🔥','👏'].includes(m.emoji)) return; for (const w of this.sockets.keys()) this.send(w, { t: 'react', from: id, emoji: m.emoji }); return;
       }
       await this.save(); this.broadcast();
     } catch (e: any) { this.send(ws, { t: 'error', message: e.message ?? 'Error' }); }
+  }
+  /** Remove players (left, kicked or timed out). Mid-game the engine removes them if it can; otherwise the game is abandoned. */
+  dropMembers(ids: string[]): string[] {
+    const gone = this.members.filter(m => ids.includes(m.id)); if (!gone.length) return [];
+    this.members = this.members.filter(m => !ids.includes(m.id));
+    for (const [w, pid] of [...this.sockets]) if (ids.includes(pid)) this.sockets.delete(w);
+    if (ids.includes(this.hostId)) this.hostId = (this.members.find(m => m.connected) ?? this.members[0])?.id ?? '';
+    const e = engines[this.game];
+    if (this.status === 'active' && this.state) {
+      for (const m of gone) if (e.removePlayer && !e.isGameOver(this.state)) this.state = e.removePlayer(this.state, m.id);
+      if (e.isGameOver(this.state)) this.status = 'completed';
+      else if (this.members.length < e.minPlayers) { this.status = 'completed'; this.abandoned = true; }
+    }
+    return gone.map(m => m.nickname);
   }
   async join(ws: WebSocket, m: Extract<ClientMsg, { t: 'join' }>) {
     const nick = String(m.nickname).replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 16);
