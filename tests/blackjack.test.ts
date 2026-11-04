@@ -13,7 +13,7 @@ describe('blackjack', () => {
     s = blackjack.handleAction(s, 'a', { type: 'stand' }); expect(s.turn).toBe(1);
   });
   it('finishes after all stand', () => {
-    let s = blackjack.initialize(['a'], { rounds: 1 }); s.players[0].status = 'playing'; s.players[0].hand = [c('10'), c('9')]; s.dealer = [c('10'), c('7')]; s.turn = 0;
+    let s = blackjack.initialize(['a'], { rounds: 1 }); s.phase = 'player'; s.history = []; s.players[0].status = 'playing'; s.players[0].hand = [c('10'), c('9')]; s.dealer = [c('10'), c('7')]; s.turn = 0;
     s = blackjack.handleAction(s, 'a', { type: 'stand' }); expect(blackjack.isGameOver(s)).toBe(true); expect(s.players[0].score).toBe(1);
   });
 });

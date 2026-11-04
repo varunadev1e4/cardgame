@@ -1358,7 +1358,7 @@ var kittens = {
       alive: s.alive,
       out: s.out,
       peek: s.peeks[me] ?? null,
-      pending: p ? { by: p.by, cards: p.cards, kind: p.kind, target: p.target ?? null, nopes: p.nopes, msLeft: Math.max(0, p.deadline - Date.now()), canAllow: s.alive.includes(me) && me !== p.last && !p.passed.includes(me) } : null,
+      pending: p ? { by: p.by, cards: p.cards, kind: p.kind, target: p.target ?? null, nopes: p.nopes, msLeft: Math.max(0, p.deadline - Date.now()), canAllow: s.alive.includes(me) && me !== p.last && !p.passed.includes(me), canNope: s.alive.includes(me) && me !== p.last && (s.hands[me] ?? []).includes("nope") } : null,
       favor: s.favor ?? null,
       log: s.log.slice(-8),
       winner: s.winner ?? null,
@@ -1379,6 +1379,7 @@ var kittens = {
     if (s.phase === "pending") {
       const p = s.pending;
       if (a.type === "nope") {
+        if (pid === p.last) throw new Error("You can't Nope your own action");
         take("nope");
         p.nopes++;
         p.last = pid;

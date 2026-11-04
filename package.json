@@ -1,3 +1,17 @@
-{"name":"cardroom","private":true,"type":"module",
- "scripts":{"test":"vitest run","build:function":"esbuild supabase/game-src.ts --bundle --format=esm --target=es2022 --outfile=supabase/functions/game/index.ts"},
- "devDependencies":{"esbuild":"^0.21.5","typescript":"^5.5.0","vitest":"^2.0.0"}}
+{
+ "name": "cardroom",
+ "private": true,
+ "type": "module",
+ "scripts": {
+  "test": "vitest run",
+  "build:function": "esbuild supabase/game-src.ts --bundle --format=esm --target=es2022 --outfile=supabase/functions/game/index.ts",
+  "setup": "npm install && npm --prefix frontend install",
+  "dev": "npm --prefix frontend run dev",
+  "build": "npm --prefix frontend run build"
+ },
+ "devDependencies": {
+  "esbuild": "^0.21.5",
+  "typescript": "^5.5.0",
+  "vitest": "^2.0.0"
+ }
+}

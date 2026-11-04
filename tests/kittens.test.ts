@@ -16,6 +16,13 @@ describe('kittens', () => {
     s.hands.a.push('attack'); s = kittens.handleAction(s, 'a', { type: 'play', card: 'attack' }); s.pending.deadline = 0; s = kittens.handleAction(s, 'a', { type: 'resolve' }); expect(s.ids[s.turn]).toBe('b'); expect(s.owed).toBe(2);
     s.hands.b.push('attack'); s = kittens.handleAction(s, 'b', { type: 'play', card: 'attack' }); s.pending.deadline = 0; s = kittens.handleAction(s, 'b', { type: 'resolve' }); expect(s.ids[s.turn]).toBe('c'); expect(s.owed).toBe(4);
   });
+  it('the player who acted cannot Nope their own action, but can Nope a Nope', () => {
+    let s = mk(); s = kittens.handleAction(s, 'a', { type: 'play', card: 'attack' });
+    expect(() => kittens.handleAction(s, 'a', { type: 'nope' })).toThrow('own action');
+    expect((kittens.getPlayerView(s, 'a') as any).pending.canNope).toBe(false); expect((kittens.getPlayerView(s, 'b') as any).pending.canNope).toBe(true);
+    s = kittens.handleAction(s, 'b', { type: 'nope' }); expect(() => kittens.handleAction(s, 'b', { type: 'nope' })).toThrow();
+    s = kittens.handleAction(s, 'a', { type: 'nope' }); expect(s.pending.nopes).toBe(2);
+  });
   it('bomb, defuse reinsert, explode', () => {
     let s = mk(); s.deck = ['x', 'boom']; s = kittens.handleAction(s, 'a', { type: 'draw' }); expect(s.phase).toBe('reinsert');
     s = kittens.handleAction(s, 'a', { type: 'reinsert', pos: 0 }); expect(s.deck[s.deck.length - 1]).toBe('boom'); expect(s.ids[s.turn]).toBe('b');

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 const SB = String(import.meta.env.VITE_SUPABASE_URL || ''), KEY = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '');
-const sb = createClient(SB, KEY);
+const sb = SB && KEY ? createClient(SB, KEY) : (null as any);
 const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const newCode = () => [...crypto.getRandomValues(new Uint8Array(6))].map(x => ALPHA[x % 32]).join('');
 const EMOJI = ['👍', '😂', '😮', '😢', '🔥', '👏'];
@@ -327,7 +327,7 @@ function KT({ v, act, nm }: any) {
     <div className="table"><div className="pile"><div className="card back" /><small>Deck · {v.deckCount}</small></div><div className="pile">{v.discard[0] ? <span className="fxmini">{ICON[v.discard[0]]}<small>{v.discard[0]}</small></span> : <span className="fxmini">–</span>}<small>Last played</small></div></div>
     {p && <div className="banner pend">{nm(p.by)} played {p.cards.map((c: string) => `${ICON[c]} ${c}`).join(' + ')}{p.target && ` on ${nm(p.target)}`}{p.nopes > 0 && ` · Noped ×${p.nopes}`}
       <div className="countbar"><div key={p.nopes + p.by} style={{ animationDuration: p.msLeft + 'ms' }} /></div>
-      {alive && <div className="row">{v.hand.includes('nope') && <button className="danger" onClick={() => act({ type: 'nope' })}>🚫 Nope!</button>}{p.canAllow && <button onClick={() => act({ type: 'allow' })}>Allow</button>}</div>}</div>}
+      {alive && <div className="row">{p.canNope && <button className="danger" onClick={() => act({ type: 'nope' })}>🚫 Nope!</button>}{p.canAllow && <button onClick={() => act({ type: 'allow' })}>Allow</button>}</div>}</div>}
     {v.phase === 'favor' && <div className="banner">{giving ? `Give a card to ${nm(v.favor.to)}: tap one in your hand` : `${nm(v.favor.from)} must give a card to ${nm(v.favor.to)}`}</div>}
     {v.phase === 'reinsert' && (v.turn === v.you ? <div className="banner">You defused it! Hide the bomb: {pos === 0 ? 'on top (next draw!)' : pos >= v.deckCount ? 'at the very bottom' : `${pos} cards down`}<div className="row"><input type="range" min={0} max={v.deckCount} value={pos} onChange={e => setPos(+e.target.value)} /><button className="primary" onClick={() => act({ type: 'reinsert', pos })}>Hide it</button></div></div> : <div className="banner">{nm(v.turn)} is hiding a bomb…</div>)}
     {v.peek && <p className="hint-line mine">Top 3 (next card first): {v.peek.map((c: string) => `${ICON[c]} ${c}`).join('  →  ')}</p>}
@@ -388,6 +388,7 @@ function Home({ initial, onEnter }: any) {
 export default function App() {
   const [s, setS] = useState<{ code: string; nick: string; create: boolean } | null>(null);
   const initial = (new URLSearchParams(location.search).get('room') || '').toUpperCase();
+  if (!sb) return <div className="home panel"><h1>Setup needed</h1><p className="muted">Create <b>frontend/.env.local</b> with VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (copy .env.example), then restart <b>npm run dev</b>.</p></div>;
   if (s) return <Room code={s.code} nick={s.nick} create={s.create} leave={() => { history.replaceState(null, '', '/'); setS(null); }} />;
   return <Home initial={initial} onEnter={(code: string, nick: string, create: boolean) => { history.replaceState(null, '', `/?room=${code}`); setS({ code, nick, create }); }} />;
 }

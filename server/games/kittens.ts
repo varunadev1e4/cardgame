@@ -40,7 +40,7 @@ export const kittens: GameEngine<K, any, any, any> = {
     const p = s.pending;
     return { game: 'kittens', you: me, ids: s.ids, phase: s.phase, turn: s.phase === 'over' || s.phase === 'pending' ? null : s.phase === 'favor' ? s.favor!.from : s.ids[s.turn], owed: s.owed, hand: s.hands[me] ?? [],
       counts: Object.fromEntries(s.ids.map(i => [i, s.hands[i].length])), deckCount: s.deck.length, discard: s.discard.slice(-1), alive: s.alive, out: s.out, peek: s.peeks[me] ?? null,
-      pending: p ? { by: p.by, cards: p.cards, kind: p.kind, target: p.target ?? null, nopes: p.nopes, msLeft: Math.max(0, p.deadline - Date.now()), canAllow: s.alive.includes(me) && me !== p.last && !p.passed.includes(me) } : null,
+      pending: p ? { by: p.by, cards: p.cards, kind: p.kind, target: p.target ?? null, nopes: p.nopes, msLeft: Math.max(0, p.deadline - Date.now()), canAllow: s.alive.includes(me) && me !== p.last && !p.passed.includes(me), canNope: s.alive.includes(me) && me !== p.last && (s.hands[me] ?? []).includes('nope') } : null,
       favor: s.favor ?? null, log: s.log.slice(-8), winner: s.winner ?? null,
       final: s.winner ? [s.winner, ...[...s.out].reverse()].map((id, i) => ({ id, label: i === 0 ? 'Last cat standing' : 'Exploded' })) : null };
   },
@@ -51,7 +51,7 @@ export const kittens: GameEngine<K, any, any, any> = {
     const me = s.hands[pid], take = (name: string) => { const i = me.indexOf(name); if (i < 0) throw new Error(`You don't have ${name}`); me.splice(i, 1); s.discard.push(name); };
     if (s.phase === 'pending') {
       const p = s.pending;
-      if (a.type === 'nope') { take('nope'); p.nopes++; p.last = pid; p.passed = []; p.deadline = now + WIN; s.log.push(`${pid} plays NOPE`); }
+      if (a.type === 'nope') { if (pid === p.last) throw new Error("You can't Nope your own action"); take('nope'); p.nopes++; p.last = pid; p.passed = []; p.deadline = now + WIN; s.log.push(`${pid} plays NOPE`); }
       else if (a.type === 'allow') { if (pid !== p.last && !p.passed.includes(pid)) p.passed.push(pid); if (s.alive.every(x => x === p.last || p.passed.includes(x))) resolve(s); }
       else if (a.type === 'resolve') { if (now >= p.deadline) resolve(s); } else throw new Error('Wait for the action to resolve');
       return s;
