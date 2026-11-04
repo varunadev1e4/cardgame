@@ -8,6 +8,7 @@ describe('kittens', () => {
   it('setup: bombs, defuses, hands', () => {
     const s = kittens.initialize(['a', 'b', 'c', 'd', 'e'], {}); expect(s.deck.filter(c => c === 'boom').length).toBe(4); expect(s.hands.a.length).toBe(8); expect(s.hands.a.filter(c => c === 'defuse').length).toBe(1);
     expect(s.deck.filter(c => c === 'defuse').length).toBe(1); 
+    for (const n of [6, 8]) { const g = kittens.initialize(Array.from({ length: n }, (_, i) => 'p' + i), {}); expect(g.deck.filter(c => c === 'boom').length).toBe(n - 1); expect(g.deck.filter(c => c === 'defuse').length).toBe(2); expect(Object.values(g.hands).every(h => h.length === 8)); expect(g.deck.length).toBe(92 - 7 * n + 2 + n - 1); }
     const f = kittens.initialize(['a', 'b'], {}); expect(f.deck.filter(c => c === 'boom').length).toBe(1);
   });
   it('attack stacking and nope cancel', () => {

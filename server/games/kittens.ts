@@ -26,12 +26,14 @@ function resolve(s: K) {
   }
 }
 export const kittens: GameEngine<K, any, any, any> = {
-  id: 'kittens', minPlayers: 2, maxPlayers: 5,
+  id: 'kittens', minPlayers: 2, maxPlayers: 8,
   initialize(ids, st) {
-    const n = ids.length; let deck = shuffle([...rep('attack', 4), ...rep('nope', 5), ...rep('shuffle', 4), ...rep('skip', 4), ...rep('favor', 4), ...rep('future', 5), ...CATS.flatMap(c => rep(c, 4))]);
+    const n = ids.length, copies = n > 5 ? 2 : 1; // 6+ players: the whole deck is doubled (bombs stay at players - 1)
+    const base = [...rep('attack', 4), ...rep('nope', 5), ...rep('shuffle', 4), ...rep('skip', 4), ...rep('favor', 4), ...rep('future', 5), ...CATS.flatMap(c => rep(c, 4))];
+    let deck = shuffle(Array.from({ length: copies }).flatMap(() => base));
     const hands: Record<string, string[]> = Object.fromEntries(ids.map(i => [i, ['defuse']]));
     for (let k = 0; k < 7; k++) for (const i of ids) hands[i].push(deck.pop()!);
-    deck.push(...rep('defuse', Math.min(2, 6 - n))); deck = shuffle(deck);
+    deck.push(...rep('defuse', Math.min(2, 6 * copies - n))); deck = shuffle(deck);
     if (n <= 3 && st.fast !== false) deck = deck.slice(Math.floor(deck.length / 3));
     deck = shuffle([...deck, ...rep('boom', n - 1)]);
     return { ids, alive: [...ids], out: [], hands, deck, discard: [], turn: 0, owed: 1, stack: false, phase: 'turn', peeks: {}, log: ['Game started'] };

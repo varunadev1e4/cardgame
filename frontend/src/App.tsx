@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Component, useEffect, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 const SB = String(import.meta.env.VITE_SUPABASE_URL || ''), KEY = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '');
 const sb = SB && KEY ? createClient(SB, KEY) : (null as any);
@@ -81,7 +81,7 @@ const RULES: Record<string, string> = {
   crazy8: 'Be first to empty your hand. Play a card that matches the top card by suit or rank. 8s are wild and let you pick the suit. A 2 makes the next player draw 2 and lose their turn, a Jack skips the next player. Can’t play? Draw a card; if it fits you may play it.',
   bluff: 'Get rid of all your cards. Each turn you play 1 to 4 cards face down and claim they are the required rank (A, 2, 3, … K, then around again). You may lie! The next player can Call bluff: if you lied you take the whole pile, if you told the truth they take it. Win by playing your last cards without being caught.',
   gofish: 'On your turn, pick a rank you hold and ask another player for it. If they have any, they hand them all over and you go again. If not, “Go Fish” and draw a card. Four of a kind makes a book. Most books wins.',
-  kittens: 'Take turns: play any cards you like (or none), then draw a card to end your turn. Draw a 💣 bomb and you explode, unless you play a 🧯 Defuse and secretly slide the bomb back into the deck. Last cat standing wins. ⚔️ Attack: end your turn, next player takes 2 turns (attacks stack). ⏭ Skip: end your turn without drawing. 🔀 Shuffle. 🔮 Peek at the top 3. 🤝 Favor: a player must give you a card. 🚫 Nope cancels any action (even another Nope) during the short window after it is played. Two matching cards steal a random card from a player; three matching cards let you name the card you want.',
+  kittens: '2 to 8 players (with 6 or more, the deck is doubled and there is one bomb fewer than the number of players). Take turns: play any cards you like (or none), then draw a card to end your turn. Draw a 💣 bomb and you explode, unless you play a 🧯 Defuse and secretly slide the bomb back into the deck. Last cat standing wins. ⚔️ Attack: end your turn, next player takes 2 turns (attacks stack). ⏭ Skip: end your turn without drawing. 🔀 Shuffle. 🔮 Peek at the top 3. 🤝 Favor: a player must give you a card. 🚫 Nope cancels any action (even another Nope) during the short window after it is played. Two matching cards steal a random card from a player; three matching cards let you name the card you want.',
   ttt: 'Take turns placing your mark. Three in a row, column or diagonal wins. A full board is a draw.',
   c4: 'Take turns dropping a disc into a column. The first to line up four discs in a row, column or diagonal wins.',
   dab: 'Take turns drawing a line between two neighbouring dots. Closing the fourth side of a box scores it and gives you another turn. Most boxes wins.',
@@ -353,6 +353,12 @@ function Lobby({ r, me, send, nm }: any) {
         : <input type="number" disabled={!host} value={set[k]} onChange={e => cfg(r.game, { ...set, [k]: +e.target.value })} />}</label>)}</div></div>
     {host ? <button className="primary big" onClick={() => send({ t: 'start' })}>Start game</button> : <p className="muted center">Waiting for the host to start…</p>}</div>;
 }
+class Boundary extends Component<any, any> {
+  state = { e: null as any, k: this.props.k };
+  static getDerivedStateFromError(e: any) { return { e }; }
+  static getDerivedStateFromProps(p: any, s: any) { return p.k !== s.k ? { e: null, k: p.k } : null; }
+  render() { return this.state.e ? <div className="err">Something went wrong showing this screen ({String(this.state.e?.message || this.state.e)}). <button onClick={() => location.reload()}>Reload</button></div> : this.props.children; }
+}
 function Room({ code, nick, create, leave }: any) {
   const { room, view, chat, err, me, online, flash, send, act, names } = useRoom(code, nick, create);
   const [txt, setTxt] = useState(''), [help, setHelp] = useState(false), [chatOpen, setChatOpen] = useState(false);
@@ -369,8 +375,8 @@ function Room({ code, nick, create, leave }: any) {
     {help && room && <div className="modal" onClick={() => setHelp(false)}><div className="mbox"><h3>{GAMES[room.game].name}</h3><p>{RULES[room.game]}</p><button className="primary" onClick={() => setHelp(false)}>Got it</button></div></div>}
     <div className="layout"><div>{!room ? <p className="muted">Connecting…</p> : room.status === 'waiting' ? <Lobby r={room} me={me} send={send} nm={nm} /> :
       <div className="panel board">{room.abandoned && <><div className="banner">The game ended because too many players left.</div>{host ? <div className="actions"><button className="primary big" onClick={() => send({ t: 'rematch' })}>Play again</button><button className="big" onClick={() => send({ t: 'lobby' })}>Back to lobby</button></div> : <p className="muted center">Waiting for the host.</p>}</>}
-        {room.status === 'completed' && view && !room.abandoned && <><Podium g={room.game} v={view} nm={nm} />{host ? <div className="actions"><button className="primary big" onClick={() => send({ t: 'rematch' })}>Play again</button><button className="big" onClick={() => send({ t: 'lobby' })}>Back to lobby</button></div> : <p className="muted center">Waiting for the host to start a rematch.</p>}</>}
-        {view && !room.abandoned ? <Board v={view} act={act} nm={nm} /> : !view && <p>Loading…</p>}</div>}</div>
+        {room.status === 'completed' && view && !room.abandoned && <><Boundary k={room.status}><Podium g={room.game} v={view} nm={nm} /></Boundary>{host ? <div className="actions"><button className="primary big" onClick={() => send({ t: 'rematch' })}>Play again</button><button className="big" onClick={() => send({ t: 'lobby' })}>Back to lobby</button></div> : <p className="muted center">Waiting for the host to start a rematch.</p>}</>}
+        {view && !room.abandoned ? <Boundary k={String(view.phase) + room.status + (view.turn ?? '')}><Board v={view} act={act} nm={nm} /></Boundary> : !view && <p>Loading…</p>}</div>}</div>
       <div className={'panel side' + (chatOpen ? ' open' : '')}><h4>Players</h4>{room?.players.map((p: any) => <div className="pl" key={p.id}><Av name={p.nickname} size={24} />{p.nickname}{p.isHost ? ' (host)' : ''}<span className="grow" /><span className={'dot' + (p.connected ? ' on' : '')} /></div>)}
         <h4>Chat</h4><div className="chat">{chat.map((m, i) => <div key={i} className={m.system ? 'sys' : ''}>{m.system ? '' : <b>{m.from}: </b>}{m.text}</div>)}</div>
         <div className="row">{EMOJI.map(e => <button key={e} className="ghost sm" onClick={() => send({ t: 'react', emoji: e })}>{e}</button>)}</div>
@@ -389,6 +395,8 @@ export default function App() {
   const [s, setS] = useState<{ code: string; nick: string; create: boolean } | null>(null);
   const initial = (new URLSearchParams(location.search).get('room') || '').toUpperCase();
   if (!sb) return <div className="home panel"><h1>Setup needed</h1><p className="muted">Create <b>frontend/.env.local</b> with VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (copy .env.example), then restart <b>npm run dev</b>.</p></div>;
-  if (s) return <Room code={s.code} nick={s.nick} create={s.create} leave={() => { history.replaceState(null, '', '/'); setS(null); }} />;
+  if (s) return <Boundary k={s.code}><Room code={s.code} nick={s.nick} create={s.create} leave={() => { history.replaceState(null, '', '/'); setS(null); }} /></Boundary>;
   return <Home initial={initial} onEnter={(code: string, nick: string, create: boolean) => { history.replaceState(null, '', `/?room=${code}`); setS({ code, nick, create }); }} />;
 }
+
+export { BOARDS, Podium };

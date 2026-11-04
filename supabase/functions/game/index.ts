@@ -387,7 +387,7 @@ var leastcount = {
       round: s.round,
       turn: ended ? null : s.ids[s.turn],
       turnPhase: s.tp,
-      hand: s.hands[me],
+      hand: s.hands[me] ?? [],
       counts: Object.fromEntries(s.ids.map((i) => [i, s.hands[i].length])),
       discardTop: s.discard[s.discard.length - 1],
       stock: s.deck.length,
@@ -476,7 +476,7 @@ var elimination = {
       phase: s.phase,
       turn: s.phase === "play" ? s.ids[s.turn] : null,
       turnsOwed: s.owed,
-      hand: s.hands[me],
+      hand: s.hands[me] ?? [],
       peek: s.peeks[me] ?? null,
       counts: Object.fromEntries(s.ids.map((i) => [i, s.hands[i].length])),
       deckCount: s.deck.length,
@@ -567,7 +567,7 @@ var crazy8 = {
       game: "crazy8",
       you: me,
       turn: s.winner ? null : s.ids[s.turn],
-      hand: s.hands[me],
+      hand: s.hands[me] ?? [],
       counts: Object.fromEntries(s.ids.map((i) => [i, s.hands[i].length])),
       top: top(s),
       suit: s.suit,
@@ -653,7 +653,7 @@ var bluff = {
       game: "bluff",
       you: me,
       turn: s.winner ? null : s.ids[s.turn],
-      hand: s.hands[me],
+      hand: s.hands[me] ?? [],
       counts: Object.fromEntries(s.ids.map((i) => [i, s.hands[i].length])),
       pile: s.pile.length,
       claim: s.last ? { by: s.last.by, n: s.last.n, rank: s.last.rank } : null,
@@ -716,7 +716,10 @@ function bookUp(s, id) {
   }
 }
 function settle(s) {
-  for (let k = 0; k <= s.ids.length; k++) {
+  const next2 = () => {
+    s.turn = (s.turn + 1) % s.ids.length;
+  };
+  for (let k = 0; k < s.ids.length * 3 + 5; k++) {
     if (s.ids.reduce((a, i) => a + s.books[i].length, 0) >= 13) {
       s.phase = "over";
       return;
@@ -725,8 +728,20 @@ function settle(s) {
     if (!s.hands[id].length) for (let n = 0; n < 5 && s.deck.length; n++) s.hands[id].push(s.deck.pop());
     sortHand(s.hands[id]);
     bookUp(s, id);
-    if (s.hands[id].length) return;
-    s.turn = (s.turn + 1) % s.ids.length;
+    if (!s.hands[id].length) {
+      next2();
+      continue;
+    }
+    if (s.ids.some((i) => i !== id && s.hands[i].length)) return;
+    if (s.deck.length) {
+      s.hands[id].push(s.deck.pop());
+      sortHand(s.hands[id]);
+      bookUp(s, id);
+      s.log.push(`${id} has nobody to ask and fishes from the pond`);
+      next2();
+      continue;
+    }
+    break;
   }
   s.phase = "over";
 }
@@ -746,7 +761,7 @@ var gofish = {
     return s;
   },
   getPlayerView(s, me) {
-    return { game: "gofish", you: me, phase: s.phase, turn: s.phase === "play" ? s.ids[s.turn] : null, hand: s.hands[me], counts: Object.fromEntries(s.ids.map((i) => [i, s.hands[i].length])), books: s.books, deckCount: s.deck.length, log: s.log.slice(-6) };
+    return { game: "gofish", you: me, phase: s.phase, turn: s.phase === "play" ? s.ids[s.turn] : null, hand: s.hands[me] ?? [], counts: Object.fromEntries(s.ids.map((i) => [i, s.hands[i].length])), books: s.books, deckCount: s.deck.length, log: s.log.slice(-6) };
   },
   handleAction(s0, pid, a) {
     const s = structuredClone(s0);
@@ -1330,13 +1345,14 @@ function resolve(s) {
 var kittens = {
   id: "kittens",
   minPlayers: 2,
-  maxPlayers: 5,
+  maxPlayers: 8,
   initialize(ids, st) {
-    const n = ids.length;
-    let deck = shuffle([...rep("attack", 4), ...rep("nope", 5), ...rep("shuffle", 4), ...rep("skip", 4), ...rep("favor", 4), ...rep("future", 5), ...CATS2.flatMap((c) => rep(c, 4))]);
+    const n = ids.length, copies = n > 5 ? 2 : 1;
+    const base = [...rep("attack", 4), ...rep("nope", 5), ...rep("shuffle", 4), ...rep("skip", 4), ...rep("favor", 4), ...rep("future", 5), ...CATS2.flatMap((c) => rep(c, 4))];
+    let deck = shuffle(Array.from({ length: copies }).flatMap(() => base));
     const hands = Object.fromEntries(ids.map((i) => [i, ["defuse"]]));
     for (let k = 0; k < 7; k++) for (const i of ids) hands[i].push(deck.pop());
-    deck.push(...rep("defuse", Math.min(2, 6 - n)));
+    deck.push(...rep("defuse", Math.min(2, 6 * copies - n)));
     deck = shuffle(deck);
     if (n <= 3 && st.fast !== false) deck = deck.slice(Math.floor(deck.length / 3));
     deck = shuffle([...deck, ...rep("boom", n - 1)]);
